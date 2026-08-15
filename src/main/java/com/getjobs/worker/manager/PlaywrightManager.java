@@ -1736,6 +1736,10 @@ public class PlaywrightManager {
         });
         try {
             migrateLagouSessionToPersistentProfile();
+        } catch (Exception e) {
+            log.warn("拉勾旧会话迁移未完成，继续打开页面: {}", e.getMessage());
+        }
+        try {
             lagouPage.navigate(LAGOU_URL, new Page.NavigateOptions()
                     .setTimeout(60000).setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
             handleLagouAccessVerification();
@@ -2718,7 +2722,14 @@ public class PlaywrightManager {
             case "boss" -> bossPage != null;
             case "liepin" -> liepinPage != null;
             case "51job" -> job51Page != null;
-            case "zhilian" -> gate.call(() -> resolveLiveZhilianPage(false) != null);
+            case "zhilian" -> gate.call(() -> {
+                // initializePlatformPages is also used as an isolated test seam before
+                // the manager has been bound to its browser context.
+                if (context == null) {
+                    return zhilianPage != null;
+                }
+                return resolveLiveZhilianPage(false) != null;
+            });
             case "lagou" -> lagouPage != null;
             default -> throw new IllegalArgumentException("Unsupported platform: " + platform);
         };

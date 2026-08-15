@@ -1,5 +1,7 @@
 package com.getjobs.worker.manager;
 
+import com.getjobs.application.service.CookieService;
+import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Mouse;
 import com.microsoft.playwright.Page;
@@ -150,6 +152,29 @@ class LagouAccessSliderTest {
 
         verify(scenario.page).reload(any(Page.ReloadOptions.class));
         assertEquals(2, scenario.slideAttempts.get());
+    }
+
+    @Test
+    void opensLagouWhenLegacySessionCleanupFails() throws Exception {
+        PlaywrightManager manager = new PlaywrightManager();
+        Page page = mock(Page.class);
+        BrowserContext context = mock(BrowserContext.class);
+        CookieService cookieService = mock(CookieService.class);
+
+        when(context.cookies()).thenReturn(List.of());
+        doThrow(new RuntimeException("cookie table unavailable"))
+                .when(cookieService).clearCookieByPlatform(eq("lagou"), any(String.class));
+
+        setField(manager, "lagouPage", page);
+        setField(manager, "context", context);
+        setField(manager, "persistentBrowserContext", true);
+        setField(manager, "cookieService", cookieService);
+
+        Method setup = PlaywrightManager.class.getDeclaredMethod("setupLagouPlatform");
+        setup.setAccessible(true);
+        setup.invoke(manager);
+
+        verify(page).navigate(any(String.class), any(Page.NavigateOptions.class));
     }
 
     @Test

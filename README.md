@@ -24,7 +24,7 @@
 - 📌 **目前该项目存在的问题**
     - 【紧急】目前Boss新增了检测机制，导致网页被回退，目前解决的问题是首页已完成正常访问，但在投递过程中会不断的刷新，如哪位有解决的办法，请务必分享，感激不尽，讨论链接：https://github.com/loks666/get_jobs/discussions/250（已解决）
     - Boss 的 AI 消息发送功能目前仍存在 Bug，AI 消息可能无法正常发送，相关问题还在处理中。
-    - 当前智联招聘平台有问题，其他平台可正常使用，如有兄台解决了智联招聘投递问题沟通后可提交pr。
+    - 智联招聘投递问题已解决，当前可正常使用；首次使用仍需在网页端指定默认投递简历。
     - 本项目已改为禁止商业化的开源协议,请勿将此项目进行商业化
     - [【重要】跳转到文末更新日志](#-更新日志)
     - 老版本在本项目的genesis分支上，目前可能暂停更新，如有修复老版本问题的可联系后提交pr
@@ -152,6 +152,16 @@ cd get_jobs
 ### 4️⃣ 运行代码
 
 - 🏃🏻‍♂️‍➡️ 运行启动类即可[GetJobsApplication.java](src/main/java/com/getjobs/GetJobsApplication.java)
+
+#### 启动时的目录与数据库
+
+- 首次启动会自动创建 `db/` 目录，无需手动创建数据库目录。
+- SQLite 数据库文件为 `db/getjobs.db`。
+- Spring Boot 启动时会自动执行 `src/main/resources/schema.sql` 和 `src/main/resources/data.sql`，用于创建缺失的表并写入默认配置；已有数据会保留。
+- Playwright 默认使用持久化浏览器目录 `db/playwright-profile`，其中可能包含登录状态。可通过环境变量 `GET_JOBS_BROWSER_PROFILE_DIR` 指定其他目录。
+- 后端 API 默认监听 `8888` 端口，运行日志写入 `target/logs/get-jobs.log`。
+
+如果启动后平台显示未登录，请在网页端重新完成对应平台的登录或 Cookie 保存。拉勾旧会话清理失败时程序会继续打开页面，但可能需要重新登录。
 
 ---
 

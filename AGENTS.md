@@ -4,9 +4,10 @@
 
 - `src/main/java/com/getjobs/` contains the Spring Boot backend and platform automation (`boss`, `liepin`, `job51`, and `zhilian`).
 - `src/main/resources/` contains application configuration and runtime resources.
+- `src/main/resources/schema.sql` defines the SQLite schema and `src/main/resources/data.sql` seeds default configuration; keep both scripts idempotent when changing database initialization.
 - `src/test/java/` contains backend tests.
 - `front/app/`, `front/components/`, `front/lib/`, and `front/public/` contain the Next.js frontend.
-- `db/getjobs.db` is local SQLite runtime data; do not treat database changes as source changes.
+- `db/` contains local runtime data. The application creates it on startup; `db/getjobs.db` is the SQLite database and `db/playwright-profile` is the default persistent browser profile. Do not treat either as source changes.
 
 ## Build, Test, and Development Commands
 
@@ -27,6 +28,10 @@ pnpm lint                 # Run ESLint
 pnpm build                # Create a production build
 ```
 
+The backend initializes missing SQLite tables and default configuration from `schema.sql` and `data.sql` on startup. The API listens on port `8888` by default, and logs are written to `target/logs/get-jobs.log`.
+
+Playwright uses `db/playwright-profile` for persistent cookies and browser state by default. Set `GET_JOBS_BROWSER_PROFILE_DIR` when an isolated profile is needed for tests or local debugging.
+
 ## Coding Style & Naming
 
 - Use four spaces in Java and two spaces in TypeScript/TSX.
@@ -42,7 +47,7 @@ Backend tests use JUnit 5 with Spring Boot test support and Mockito. Name test f
 
 Use short, imperative English subjects; existing commits sometimes use an emoji prefix. Example: `fix(51job): support page-number navigation`. Pull requests should explain the behavior change and verification commands, link an issue when available, and include screenshots for frontend changes.
 
-Do not commit `.codegraph/`, `.env`, cookies, generated `target/`, `front/.next/`, `front/node_modules/`, or local database files.
+Do not commit `.codegraph/`, `.env`, cookies, generated `target/`, `front/.next/`, `front/node_modules/`, `db/getjobs.db`, `db/playwright-profile/`, or other local database and browser-state files. Keep `schema.sql` and `data.sql` under version control because they are application initialization sources.
 
 ## Security and Runtime Data
 
