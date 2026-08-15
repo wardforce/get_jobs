@@ -45,6 +45,12 @@ public class ZhiLian {
     private int maxPage = 500;
 
     private static final String HOME_URL = "https://www.zhaopin.com/sou/";
+    private static final String LOGIN_MODAL_SELECTOR =
+            "div.a-job-apply-workflow-close div.zppp-panel-login-normal, " +
+            "div.a-job-apply-workflow-close div.zppp-panel-login-qrcode";
+    private static final String SUCCESS_POPUP_SELECTOR = "body:has-text(\"投递成功\")";
+    private static final double SUCCESS_POPUP_TIMEOUT_MS = 15_000;
+    private static final double SUCCESS_POPUP_CLOSE_TIMEOUT_MS = 5_000;
 
     private final ZhilianService zhilianService;
 
@@ -113,6 +119,8 @@ public class ZhiLian {
                 log.info("未投递新的岗位...");
             }
 
+        } catch (ZhilianAuthenticationExpiredException e) {
+            throw e;
         } catch (Exception e) {
             log.error("智联招聘投递过程出现异常", e);
             sendProgress("投递出现异常: " + e.getMessage(), null, null);
@@ -210,6 +218,10 @@ public class ZhiLian {
             }
 
             log.info("关键词【{}】投递完成", keyword);
+        } catch (ZhilianAuthenticationExpiredException e) {
+            throw e;
+        } catch (ZhilianPopupCloseException e) {
+            throw e;
         } catch (Exception e) {
             log.error("投递关键词【{}】时出现异常", keyword, e);
         }
@@ -312,27 +324,10 @@ public class ZhiLian {
                     log.info("岗位【{}】未找到立即投递按钮，跳过", pj.jobTitle);
                     continue;
                 }
+                ensureZhilianSession();
                 try {
-                    // 点击前：注册监听器，统一关闭由当前页面打开的新窗口（弹出页）
-                    java.util.function.Consumer<Page> closer = (Page newPage) -> {
-                        try {
-                            // 只关闭由当前 page 打开的子窗口，避免误伤
-                            if (newPage.opener() == page) {
-                                try { newPage.waitForLoadState(); } catch (Exception ignored) {}
-                                try { PlaywrightUtil.sleep(200); } catch (Exception ignored) {}
-                                try { newPage.close(); } catch (Exception ignored) {}
-                            }
-                        } catch (Exception ignored) {}
-                    };
-                    page.context().onPage(closer);
-
-                    // 仅通过监听器捕捉并关闭由当前页打开的新窗口，避免与 waitForPopup 产生竞态
-                    try {
-                        applyBtn.click(); /* 点击投递按钮（关键定位注释：delivery-click-line）*/
-                    } finally {
-                        // 取消监听，避免影响后续流程
-                        try { page.context().offPage(closer); } catch (Exception ignored) {}
-                    }
+                    submitAndCloseSuccessPopup(applyBtn);
+                    ensureZhilianSession();
 
                     try {
                         if (pj.jobId != null && !pj.jobId.isEmpty()) {
@@ -345,6 +340,11 @@ public class ZhiLian {
                     } catch (Exception ex) {
                         log.warn("更新投递状态失败: {}", ex.getMessage());
                     }
+                } catch (ZhilianAuthenticationExpiredException e) {
+                    throw e;
+                } catch (ZhilianPopupCloseException e) {
+                    log.error("投递成功弹窗未能关闭，停止当前投递流程: {}", e.getMessage());
+                    throw e;
                 } catch (Exception clickEx) {
                     log.warn("投递失败，继续下一个岗位: {}", clickEx.getMessage());
                 }
@@ -356,6 +356,10 @@ public class ZhiLian {
             }
 
             return true;
+        } catch (ZhilianAuthenticationExpiredException e) {
+            throw e;
+        } catch (ZhilianPopupCloseException e) {
+            throw e;
         } catch (Exception e) {
             log.error("投递当前页面失败", e);
             try {
@@ -365,6 +369,69 @@ public class ZhiLian {
                 log.warn("保存当前页面HTML失败: {}", saveEx.getMessage());
             }
             return false;
+        }
+    }
+
+    /**
+     * 点击投递并完整处理该次点击产生的成功页。
+     * 只有成功页已经加载、确认投递成功且完成关闭后，本方法才会返回。
+     */
+    private void submitAndCloseSuccessPopup(Locator applyBtn) {
+        Page successPopup = page.waitForPopup(
+                new Page.WaitForPopupOptions().setTimeout(SUCCESS_POPUP_TIMEOUT_MS),
+                applyBtn::click);
+
+        RuntimeException deliveryError = null;
+        try {
+            successPopup.waitForLoadState();
+            successPopup.waitForSelector(
+                    SUCCESS_POPUP_SELECTOR,
+                    new Page.WaitForSelectorOptions().setTimeout(SUCCESS_POPUP_TIMEOUT_MS));
+        } catch (RuntimeException e) {
+            deliveryError = e;
+        }
+
+        try {
+            closeSuccessPopupAndWait(successPopup);
+        } catch (ZhilianPopupCloseException closeError) {
+            if (deliveryError != null) {
+                closeError.addSuppressed(deliveryError);
+            }
+            throw closeError;
+        }
+
+        if (deliveryError != null) {
+            throw deliveryError;
+        }
+    }
+
+    private void closeSuccessPopupAndWait(Page successPopup) {
+        try {
+            if (!successPopup.isClosed()) {
+                successPopup.close();
+            }
+            if (!successPopup.isClosed()) {
+                page.waitForCondition(
+                        successPopup::isClosed,
+                        new Page.WaitForConditionOptions().setTimeout(SUCCESS_POPUP_CLOSE_TIMEOUT_MS));
+            }
+            if (!successPopup.isClosed()) {
+                throw new ZhilianPopupCloseException("关闭操作完成后弹窗仍处于打开状态");
+            }
+        } catch (ZhilianPopupCloseException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new ZhilianPopupCloseException("等待投递成功弹窗关闭超时", e);
+        }
+    }
+
+    private static final class ZhilianPopupCloseException extends RuntimeException {
+        private ZhilianPopupCloseException(String message) {
+            super(message);
+        }
+
+        private ZhilianPopupCloseException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -488,6 +555,13 @@ public class ZhiLian {
     /**
      * 检查是否达到投递上限
      */
+    private void ensureZhilianSession() {
+        Locator loginModal = page.locator(LOGIN_MODAL_SELECTOR);
+        if (loginModal.count() > 0 && loginModal.first().isVisible()) {
+            throw new ZhilianAuthenticationExpiredException("智联招聘登录状态已失效");
+        }
+    }
+
     private boolean checkIsLimit() {
         try {
             PlaywrightUtil.sleep(1);

@@ -64,5 +64,11 @@ dist/
 # Local code graph artifacts
 .codegraph/
 
+# Local package cache and Codex runtime artifacts
+.pnpm-store/
+.codex/*.log
+.codex/*.err.log
+.codex/*.png
+
 # Git worktrees
 .worktrees/

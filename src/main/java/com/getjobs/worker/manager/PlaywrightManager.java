@@ -14,17 +14,32 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import java.awt.AWTException;
+import java.awt.GraphicsEnvironment;
+import java.awt.Rectangle;
+import java.awt.Robot;
+import java.awt.event.InputEvent;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.random.RandomGenerator;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Playwright管理器
@@ -48,6 +63,11 @@ public class PlaywrightManager {
     // 浏览器上下文（所有平台共享，在同一个窗口中打开多个标签页）
     private BrowserContext context;
 
+    // 持久化浏览器上下文会保存完整站点状态（Cookie、LocalStorage、IndexedDB、设备状态）。
+    private boolean persistentBrowserContext;
+    private boolean connectedOverCdp;
+    private Process chromeProcess;
+
     // Boss直聘页面
     private Page bossPage;
 
@@ -60,8 +80,20 @@ public class PlaywrightManager {
     // 智联招聘页面（预留）
     private Page zhilianPage;
 
+    // 拉勾页面（预留）
+    private Page lagouPage;
+
     // 登录状态追踪（平台 -> 是否已登录）
     private final Map<String, Boolean> loginStatus = new ConcurrentHashMap<>();
+
+    // 智联页面引用和登录状态分开维护，页面断开时不把已确认的登录直接判定为退出
+    private enum ZhilianLoginState { LOGGED_IN, LOGGED_OUT, UNKNOWN }
+    private volatile String zhilianPageState = "MISSING";
+    private volatile String zhilianLoginState = "UNKNOWN";
+    private volatile String zhilianPageUrl;
+    private volatile String zhilianStateMessage = "智联页面尚未连接";
+    private volatile long zhilianLastCheckedAt;
+    private final Set<Page> zhilianMonitoredPages = ConcurrentHashMap.newKeySet();
 
     // 登录状态监听器
     private final List<Consumer<LoginStatusChange>> loginStatusListeners = new CopyOnWriteArrayList<>();
@@ -77,6 +109,8 @@ public class PlaywrightManager {
     // 控制是否暂停对zhilianPage的后台监控
     private volatile boolean zhilianMonitoringPaused = false;
 
+    private volatile boolean lagouMonitoringPaused = false;
+
     // 记录智联招聘是否已处理过未登录引导（仅初始化时执行一次）
     private volatile boolean zhilianLoginGuided = false;
 
@@ -88,10 +122,35 @@ public class PlaywrightManager {
     private static final String LIEPIN_URL = "https://www.liepin.com";
   private static final String JOB51_URL = "https://www.51job.com";
     private static final String ZHILIAN_URL = "https://www.zhaopin.com";
+    private static final String LAGOU_URL = "https://www.lagou.com";
     private static final String BOSS_DOMAIN = "zhipin.com";
     private static final String LIEPIN_DOMAIN = "liepin.com";
     private static final String JOB51_DOMAIN = "51job.com";
     private static final String ZHILIAN_DOMAIN = "zhaopin.com";
+    private static final String LAGOU_DOMAIN = "lagou.com";
+    private static final String LAGOU_ACCESS_VERIFICATION =
+            "#aliyunCaptcha-sliding-wrapper, #waf_nc_block";
+    private static final List<String> LAGOU_VERIFICATION_RETRY_SELECTORS = List.of(
+            "button:has-text('验证失败')",
+            "[role='button']:has-text('验证失败')",
+            "text=/验证失败.*请刷新/",
+            "#aliyunCaptcha-sliding-refresh",
+            "[class*='refresh']:has-text('请刷新')"
+    );
+    private static final int LAGOU_INLINE_RETRIES_BEFORE_REFRESH = 2;
+    private static final Pattern LAGOU_VERIFY_RESULT_PATTERN = Pattern.compile(
+            "verifyResult\\s*[:=]\\s*(true|false)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LAGOU_VERIFY_CODE_PATTERN = Pattern.compile(
+            "verifyCode\\s*[:=]\\s*['\"]?([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE);
+    private static final Path BROWSER_PROFILE_DIRECTORY = Path.of(
+            System.getenv().getOrDefault("GET_JOBS_BROWSER_PROFILE_DIR", "db/playwright-profile")
+    ).toAbsolutePath().normalize();
+    private static final Path LAGOU_PROFILE_MIGRATION_MARKER =
+            BROWSER_PROFILE_DIRECTORY.resolve(".lagou-session-v2");
+    private static final boolean LAGOU_NATIVE_MOUSE_ENABLED = Boolean.parseBoolean(
+            System.getenv().getOrDefault("GET_JOBS_LAGOU_NATIVE_MOUSE", "true"));
+    private static final int CHROME_DEBUG_PORT = Integer.parseInt(
+            System.getenv().getOrDefault("GET_JOBS_CHROME_DEBUG_PORT", "9223"));
     private static final String BOSS_INIT_SCRIPT_RESOURCE = "anti-detection.js";
     private static final java.nio.file.Path CHROME_EXECUTABLE = java.nio.file.Path.of(
             System.getenv().getOrDefault(
@@ -103,6 +162,11 @@ public class PlaywrightManager {
     private volatile long last51CookieLogMs = 0L;
     private volatile int last51CookieLogCount = -1;
     private volatile String last51CookieRemark = "";
+    private volatile Boolean lagouVerificationResult;
+    private volatile String lagouVerificationCode = "";
+    private volatile int lagouVerificationAttempts;
+    private volatile int lagouInlineRetries;
+    private volatile long lagouNextVerificationAttemptAtMs;
 
     @Autowired
     private CookieService cookieService;
@@ -124,42 +188,41 @@ public class PlaywrightManager {
             playwright = Playwright.create();
             log.info("✓ Playwright引擎已启动");
 
-            // 使用干净会话启动真实 Chrome，登录信息只从数据库 Cookie 恢复，避免 Profile 旧 Cookie 冲突
-            browser = playwright.chromium().launch(
-                    new BrowserType.LaunchOptions()
-                    .setExecutablePath(CHROME_EXECUTABLE)
-                    .setHeadless(false) // 非无头模式，可视化调试
-                    .setSlowMo(50) // 放慢操作速度，便于调试
-                    .setIgnoreDefaultArgs(List.of("--enable-automation"))
-                    .setArgs(List.of(
-                            "--start-maximized", // 最大化启动窗口
-                            "--disable-blink-features=AutomationControlled"
-                    ))
-            );
-            context = browser.newContext(new Browser.NewContextOptions().setViewportSize(null));
-            log.info("✓ 系统Chrome干净上下文已启动");
+            // 先按普通桌面Chrome方式启动，再通过本机CDP连接，避免Playwright注入整组启动参数。
+            Files.createDirectories(BROWSER_PROFILE_DIRECTORY);
+            try {
+                launchDesktopChromeAndConnectOverCdp();
+            } catch (Exception cdpError) {
+                log.warn("普通Chrome CDP连接失败，回退到Playwright持久化启动: {}", cdpError.getMessage());
+                stopChromeProcess();
+                context = playwright.chromium().launchPersistentContext(
+                        BROWSER_PROFILE_DIRECTORY,
+                        new BrowserType.LaunchPersistentContextOptions()
+                        .setExecutablePath(CHROME_EXECUTABLE)
+                        .setHeadless(false)
+                        .setSlowMo(0)
+                        .setIgnoreDefaultArgs(List.of("--enable-automation"))
+                        .setArgs(List.of(
+                                "--start-maximized",
+                                "--disable-blink-features=AutomationControlled",
+                                "--disable-extensions"
+                        ))
+                        .setViewportSize(null)
+                );
+                browser = context.browser();
+                persistentBrowserContext = true;
+                connectedOverCdp = false;
+            }
+            log.info("✓ 系统Chrome持久化上下文已启动: {}, cdpMode={}",
+                    BROWSER_PROFILE_DIRECTORY, connectedOverCdp);
             injectBossInitScript(context);
 
-            // 顺序创建所有Page（避免并发创建Page导致的竞态条件）
-            log.info("开始创建所有平台的Page...");
-            bossPage = context.newPage();
-            bossPage.setDefaultTimeout(DEFAULT_TIMEOUT);
-            log.info("✓ Boss Page已创建");
-
-            liepinPage = context.newPage();
-            liepinPage.setDefaultTimeout(DEFAULT_TIMEOUT);
-            log.info("✓ 猎聘 Page已创建");
-
-            job51Page = context.newPage();
-            job51Page.setDefaultTimeout(DEFAULT_TIMEOUT);
-            log.info("✓ 51job Page已创建");
-
-            zhilianPage = context.newPage();
-            zhilianPage.setDefaultTimeout(DEFAULT_TIMEOUT);
-            log.info("✓ 智联招聘 Page已创建");
+            // 持久化 Profile 会恢复上次的标签页。优先复用并去重，避免每次重启再打开一整组页面。
+            initializePlatformPages(context);
 
             // 顺序初始化各平台，所有Playwright调用都由共享gate保护
             log.info("开始顺序初始化所有平台...");
+            setupLagouPlatform();
             setupBossPlatform();
             setupLiepinPlatform();
             setup51jobPlatform();
@@ -172,6 +235,204 @@ public class PlaywrightManager {
                 throw new RuntimeException("Playwright初始化失败", e);
             }
         });
+    }
+
+    private void launchDesktopChromeAndConnectOverCdp() throws Exception {
+        URI versionEndpoint = URI.create("http://127.0.0.1:" + CHROME_DEBUG_PORT + "/json/version");
+        if (isCdpEndpointReady(versionEndpoint)) {
+            connectToDesktopChrome();
+            log.info("检测到已运行的受控Chrome，直接接管现有上下文");
+            return;
+        }
+
+        File chromeLog = BROWSER_PROFILE_DIRECTORY.resolve("chrome-cdp.log").toFile();
+        ProcessBuilder builder = new ProcessBuilder(
+                CHROME_EXECUTABLE.toString(),
+                "--remote-debugging-address=127.0.0.1",
+                "--remote-debugging-port=" + CHROME_DEBUG_PORT,
+                "--user-data-dir=" + BROWSER_PROFILE_DIRECTORY,
+                "--start-maximized",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-extensions",
+                "about:blank"
+        );
+        builder.redirectErrorStream(true);
+        builder.redirectOutput(ProcessBuilder.Redirect.appendTo(chromeLog));
+        chromeProcess = builder.start();
+
+        boolean ready = false;
+        for (int i = 0; i < 60; i++) {
+            if (!chromeProcess.isAlive()) {
+                throw new IllegalStateException("Chrome在CDP端口就绪前退出");
+            }
+            ready = isCdpEndpointReady(versionEndpoint);
+            if (ready) {
+                break;
+            }
+            Thread.sleep(250);
+        }
+        if (!ready) {
+            throw new IllegalStateException("等待Chrome CDP端口超时: " + CHROME_DEBUG_PORT);
+        }
+
+        connectToDesktopChrome();
+    }
+
+    private boolean isCdpEndpointReady(URI versionEndpoint) {
+        try {
+            HttpURLConnection connection = (HttpURLConnection) versionEndpoint.toURL().openConnection();
+            connection.setConnectTimeout(250);
+            connection.setReadTimeout(250);
+            boolean ready = connection.getResponseCode() == 200;
+            connection.disconnect();
+            return ready;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    private void connectToDesktopChrome() {
+        browser = playwright.chromium().connectOverCDP(
+                "http://127.0.0.1:" + CHROME_DEBUG_PORT);
+        if (browser.contexts().isEmpty()) {
+            throw new IllegalStateException("CDP连接后没有可用的默认浏览器上下文");
+        }
+        context = browser.contexts().get(0);
+        persistentBrowserContext = true;
+        connectedOverCdp = true;
+    }
+
+    /**
+     * 将持久化上下文中已经恢复的平台页面重新绑定到管理器。
+     * 每个平台只保留一个顶层页面；多余的平台页和未使用的空白页会被关闭。
+     */
+    void initializePlatformPages(BrowserContext browserContext) {
+        List<Page> restoredPages = new ArrayList<>(browserContext.pages());
+        log.info("开始恢复平台Page，浏览器现有标签页数量: {}", restoredPages.size());
+
+        bossPage = claimRestoredPlatformPage(restoredPages, BOSS_DOMAIN);
+        liepinPage = claimRestoredPlatformPage(restoredPages, LIEPIN_DOMAIN);
+        job51Page = claimRestoredPlatformPage(restoredPages, JOB51_DOMAIN);
+        zhilianPage = claimRestoredPlatformPage(restoredPages, ZHILIAN_DOMAIN);
+        lagouPage = claimRestoredPlatformPage(restoredPages, LAGOU_DOMAIN);
+
+        bossPage = ensurePlatformPage(browserContext, restoredPages, bossPage, "Boss");
+        liepinPage = ensurePlatformPage(browserContext, restoredPages, liepinPage, "猎聘");
+        job51Page = ensurePlatformPage(browserContext, restoredPages, job51Page, "51job");
+        zhilianPage = ensurePlatformPage(browserContext, restoredPages, zhilianPage, "智联招聘");
+        lagouPage = ensurePlatformPage(browserContext, restoredPages, lagouPage, "拉勾");
+
+        restoredPages.stream()
+                .filter(this::isBlankPage)
+                .forEach(this::closePageQuietly);
+    }
+
+    private Page claimRestoredPlatformPage(List<Page> restoredPages, String domain) {
+        List<Page> matches = restoredPages.stream()
+                .filter(page -> !isPageClosed(page))
+                .filter(page -> pageMatchesDomain(page, domain))
+                .toList();
+        restoredPages.removeAll(matches);
+        if (matches.isEmpty()) {
+            return null;
+        }
+
+        Page selected = matches.stream()
+                .filter(this::isTopLevelPage)
+                .findFirst()
+                .orElse(matches.get(0));
+        matches.stream()
+                // 带 opener 的页面属于投递流程产生的业务弹窗，不能在初始化整理时关闭。
+                .filter(page -> page != selected && isTopLevelPage(page))
+                .forEach(this::closePageQuietly);
+        log.info("✓ 已复用 {} 页面，关闭重复页 {} 个", domain, matches.size() - 1);
+        return selected;
+    }
+
+    private Page ensurePlatformPage(
+            BrowserContext browserContext,
+            List<Page> restoredPages,
+            Page restoredPage,
+            String platformName) {
+        Page page = restoredPage;
+        if (page == null) {
+            page = restoredPages.stream()
+                    .filter(this::isBlankPage)
+                    .findFirst()
+                    .orElse(null);
+            if (page != null) {
+                restoredPages.remove(page);
+                log.info("✓ {} 复用空白Page", platformName);
+            } else {
+                page = browserContext.newPage();
+                log.info("✓ {} Page已创建", platformName);
+            }
+        }
+        page.setDefaultTimeout(DEFAULT_TIMEOUT);
+        return page;
+    }
+
+    private boolean pageMatchesDomain(Page page, String domain) {
+        try {
+            String host = URI.create(page.url()).getHost();
+            if (host == null) {
+                return false;
+            }
+            String normalizedHost = host.toLowerCase(Locale.ROOT);
+            return normalizedHost.equals(domain) || normalizedHost.endsWith("." + domain);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private boolean isBlankPage(Page page) {
+        try {
+            return !page.isClosed() && "about:blank".equalsIgnoreCase(page.url());
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private boolean isTopLevelPage(Page page) {
+        try {
+            return page.opener() == null;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private boolean isPageClosed(Page page) {
+        try {
+            return page.isClosed();
+        } catch (RuntimeException ignored) {
+            return true;
+        }
+    }
+
+    private void closePageQuietly(Page page) {
+        try {
+            if (!page.isClosed()) {
+                page.close();
+            }
+        } catch (RuntimeException e) {
+            log.debug("关闭重复或空白Page失败: {}", e.getMessage());
+        }
+    }
+
+    private void stopChromeProcess() {
+        if (chromeProcess == null || !chromeProcess.isAlive()) {
+            return;
+        }
+        chromeProcess.destroy();
+        try {
+            if (!chromeProcess.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                chromeProcess.destroyForcibly();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            chromeProcess.destroyForcibly();
+        }
     }
 
     /**
@@ -958,18 +1219,163 @@ public class PlaywrightManager {
         }
 
         // 初始化登录状态并通知（如果有SSE连接会立即推送）
-        setLoginStatus("zhilian", checkIfZhilianLoggedIn());
+        ZhilianLoginState initialState = detectZhilianLoginState(zhilianPage);
+        zhilianLoginState = initialState.name();
+        setLoginStatus("zhilian", initialState == ZhilianLoginState.LOGGED_IN);
         // 设置登录状态监控
         setupZhilianLoginMonitoring(zhilianPage);
+    }
+
+    private Page resolveLiveZhilianPage(boolean createIfMissing) {
+        Page current = zhilianPage;
+        if (isLiveZhilianPage(current)) {
+            markZhilianPageConnected(current);
+            setupZhilianLoginMonitoring(current);
+            return current;
+        }
+
+        Page candidate = findLiveZhilianPage();
+        if (candidate != null) {
+            zhilianPage = candidate;
+            markZhilianPageConnected(candidate);
+            setupZhilianLoginMonitoring(candidate);
+            log.info("智联招聘页面引用已重新绑定: {}", safePageUrl(candidate));
+            return candidate;
+        }
+
+        if (createIfMissing && context != null) {
+            try {
+                Page created = context.newPage();
+                zhilianPage = created;
+                markZhilianPageConnected(created);
+                setupZhilianLoginMonitoring(created);
+                log.info("智联招聘不存在可复用页面，已创建新的主页面");
+                return created;
+            } catch (Exception e) {
+                markZhilianPageState("MISSING", "创建智联页面失败: " + e.getMessage());
+            }
+        }
+
+        markZhilianPageState("MISSING", "未找到可用的智联主页面");
+        return null;
+    }
+
+    private Page findLiveZhilianPage() {
+        if (context == null) {
+            return null;
+        }
+        Page fallback = null;
+        try {
+            List<Page> pages = context.pages();
+            for (int i = pages.size() - 1; i >= 0; i--) {
+                Page page = pages.get(i);
+                if (!isLiveZhilianPage(page) || page.opener() != null) {
+                    continue;
+                }
+                String url = safePageUrl(page);
+                if (url != null && !url.contains("passport.zhaopin.com")) {
+                    return page;
+                }
+                fallback = page;
+            }
+        } catch (Exception e) {
+            log.debug("扫描智联页面失败: {}", e.getMessage());
+        }
+        return fallback;
+    }
+
+    private boolean isLiveZhilianPage(Page page) {
+        if (page == null) {
+            return false;
+        }
+        try {
+            return !page.isClosed() && isZhilianUrl(page.url());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean isZhilianUrl(String url) {
+        return url != null && url.toLowerCase(Locale.ROOT).contains(ZHILIAN_DOMAIN);
+    }
+
+    private String safePageUrl(Page page) {
+        try {
+            return page == null ? null : page.url();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void markZhilianPageConnected(Page page) {
+        zhilianPageState = "CONNECTED";
+        zhilianPageUrl = safePageUrl(page);
+        zhilianLastCheckedAt = System.currentTimeMillis();
+        zhilianStateMessage = "智联页面连接正常";
+    }
+
+    private void markZhilianPageState(String state, String message) {
+        zhilianPageState = state;
+        zhilianPageUrl = safePageUrl(zhilianPage);
+        zhilianLastCheckedAt = System.currentTimeMillis();
+        zhilianStateMessage = message;
+    }
+
+    private ZhilianLoginState detectZhilianLoginState(Page page) {
+        if (page == null || isPageClosed(page)) {
+            markZhilianPageState("RECOVERING", "智联页面连接已断开，正在重新绑定");
+            return ZhilianLoginState.UNKNOWN;
+        }
+        try {
+            Locator loginModal = page.locator(
+                    "div.a-job-apply-workflow-close div.zppp-panel-login-normal, " +
+                    "div.a-job-apply-workflow-close div.zppp-panel-login-qrcode"
+            );
+            if (loginModal.count() > 0 && loginModal.first().isVisible()) {
+                return ZhilianLoginState.LOGGED_OUT;
+            }
+
+            Locator loginButton = page.locator("a.home-header__c-no-login").first();
+            if (loginButton.count() > 0 && loginButton.isVisible()) {
+                return ZhilianLoginState.LOGGED_OUT;
+            }
+
+            String url = safePageUrl(page);
+            if (url != null && url.contains("i.zhaopin.com")) {
+                return ZhilianLoginState.LOGGED_IN;
+            }
+
+            Locator userIdentity = page.locator(
+                    ".user-info, .user-name, .username-text, a[href*='user'], a[href*='resume']"
+            ).first();
+            if (userIdentity.count() > 0 && userIdentity.isVisible()) {
+                return ZhilianLoginState.LOGGED_IN;
+            }
+
+            // 首页没有登录入口时沿用原有兼容行为，避免把已登录会话误报为未登录。
+            return ZhilianLoginState.LOGGED_IN;
+        } catch (Exception e) {
+            markZhilianPageState("RECOVERING", "智联登录状态暂时无法确认");
+            log.debug("智联招聘：检查登录状态异常: {}", e.getMessage());
+            return ZhilianLoginState.UNKNOWN;
+        }
     }
 
     /**
      * 检查智联招聘是否已登录
      * 未登录时只在首次检测时引导用户到登录页
      */
-    private boolean checkIfZhilianLoggedIn() {
+    private boolean checkIfZhilianLoggedInLegacy() {
         try {
             if (zhilianPage == null) {
+                return false;
+            }
+
+            Locator loginModal = zhilianPage.locator(
+                    "div.a-job-apply-workflow-close div.zppp-panel-login-normal, " +
+                    "div.a-job-apply-workflow-close div.zppp-panel-login-qrcode"
+            );
+            if (loginModal.count() > 0 && loginModal.first().isVisible()) {
                 return false;
             }
 
@@ -1095,7 +1501,23 @@ public class PlaywrightManager {
      *
      * @param page 页面实例
      */
+    private boolean checkIfZhilianLoggedIn(Page page) {
+        return detectZhilianLoginState(page) == ZhilianLoginState.LOGGED_IN;
+    }
+
     private void setupZhilianLoginMonitoring(Page page) {
+        if (page == null || !zhilianMonitoredPages.add(page)) {
+            return;
+        }
+
+        page.onClose(closedPage -> {
+            zhilianMonitoredPages.remove(closedPage);
+            if (zhilianPage == closedPage) {
+                zhilianPage = null;
+                markZhilianPageState("RECOVERING", "智联页面已关闭，正在重新绑定");
+            }
+        });
+
         // 监听页面导航事件，检测URL变化
         page.onFrameNavigated(frame -> {
             if (frame == page.mainFrame()) {
@@ -1115,11 +1537,25 @@ public class PlaywrightManager {
      */
     private void checkZhilianLoginStatus(Page page) {
         try {
-            boolean isLoggedIn = checkIfZhilianLoggedIn();
-            // 如果登录状态发生变化（从未登录变为已登录）
+            if (page == null || isPageClosed(page)) {
+                resolveLiveZhilianPage(false);
+                return;
+            }
+            zhilianPage = page;
+            markZhilianPageConnected(page);
+            ZhilianLoginState detectedState = detectZhilianLoginState(page);
+            zhilianLoginState = detectedState.name();
+            if (detectedState == ZhilianLoginState.UNKNOWN) {
+                return;
+            }
+
             Boolean previousStatus = loginStatus.get("zhilian");
-            if (isLoggedIn && (previousStatus == null || !previousStatus)) {
+            if (detectedState == ZhilianLoginState.LOGGED_IN
+                    && (previousStatus == null || !previousStatus)) {
                 onZhilianLoginSuccess();
+            } else if (detectedState == ZhilianLoginState.LOGGED_OUT
+                    && Boolean.TRUE.equals(previousStatus)) {
+                setLoginStatus("zhilian", false);
             }
         } catch (Exception e) {
             // 忽略检查过程中的异常，避免影响正常流程
@@ -1136,9 +1572,11 @@ public class PlaywrightManager {
 
     private void triggerZhilianLoginInternal() {
         try {
-            if (zhilianPage == null) {
+            Page page = resolveLiveZhilianPage(true);
+            if (page == null) {
                 throw new IllegalStateException("智联招聘页面未初始化");
             }
+            zhilianPage = page;
 
             // 导航到智联首页，确保DOM就绪
             zhilianPage.navigate(ZHILIAN_URL, new Page.NavigateOptions()
@@ -1233,6 +1671,7 @@ public class PlaywrightManager {
             case "liepin" -> saveLiepinCookiesToDatabase(remark);
             case "51job" -> save51jobCookiesToDatabase(remark);
             case "zhilian" -> saveZhilianCookiesToDatabase(remark);
+            case "lagou" -> saveLagouCookiesToDatabase(remark);
             default -> throw new IllegalArgumentException("Unsupported platform: " + platform);
         }
     }
@@ -1272,6 +1711,651 @@ public class PlaywrightManager {
     public void resumeZhilianMonitoring() {
         zhilianMonitoringPaused = false;
         log.debug("智联招聘登录监控已恢复");
+    }
+
+    /** 初始化拉勾页面、恢复 Cookie 并监控登录状态。 */
+    private void setupLagouPlatform() {
+        log.info("开始初始化拉勾平台...");
+        lagouPage.onConsoleMessage(message -> {
+            recordLagouVerificationConsoleMessage(message.text());
+            log.info("拉勾页面控制台: {}", message.text());
+        });
+        lagouPage.onResponse(response -> {
+            String url = response.url().toLowerCase(Locale.ROOT);
+            if (url.contains("captcha") || url.contains("aliyun")) {
+                log.info("拉勾验证码响应: status={}, url={}", response.status(), response.url());
+            }
+        });
+        lagouPage.onRequestFailed(request -> {
+            String url = request.url().toLowerCase(Locale.ROOT);
+            if (url.contains("captcha") || url.contains("aliyun")) {
+                log.warn("拉勾验证码请求失败: failure={}, url={}", request.failure(), request.url());
+            }
+        });
+        try {
+            migrateLagouSessionToPersistentProfile();
+            lagouPage.navigate(LAGOU_URL, new Page.NavigateOptions()
+                    .setTimeout(60000).setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+            handleLagouAccessVerification();
+            try {
+                lagouPage.waitForLoadState(LoadState.NETWORKIDLE);
+            } catch (Exception e) {
+                log.debug("等待拉勾页面网络空闲失败: {}", e.getMessage());
+            }
+        } catch (Exception e) {
+            log.warn("拉勾页面初始化失败: {}", e.getMessage());
+        }
+        setLoginStatus("lagou", checkIfLagouLoggedIn());
+        lagouPage.onFrameNavigated(frame -> {
+            if (frame == lagouPage.mainFrame() && !lagouMonitoringPaused) {
+                gate.run(this::checkLagouLoginStatus);
+            }
+        });
+    }
+
+    private void migrateLagouSessionToPersistentProfile() {
+        if (!persistentBrowserContext || Files.exists(LAGOU_PROFILE_MIGRATION_MARKER)) {
+            log.info("拉勾会话由持久化 Chrome Profile 恢复，不再注入数据库 Cookie");
+            return;
+        }
+
+        try {
+            List<Cookie> preserved = context.cookies().stream()
+                    .filter(cookie -> cookie.domain == null
+                            || !cookie.domain.toLowerCase(Locale.ROOT).endsWith(LAGOU_DOMAIN))
+                    .toList();
+            context.clearCookies();
+            if (!preserved.isEmpty()) {
+                context.addCookies(preserved);
+            }
+            cookieService.clearCookieByPlatform("lagou", "migrated to persistent browser profile");
+            Files.createFile(LAGOU_PROFILE_MIGRATION_MARKER);
+            log.info("已移除旧拉勾数据库会话，后续只使用持久化 Chrome Profile");
+        } catch (Exception e) {
+            throw new IllegalStateException("迁移拉勾持久化会话失败", e);
+        }
+    }
+
+    private boolean checkIfLagouLoggedIn() {
+        try {
+            Locator loginEntry = lagouPage.locator(
+                    "a[href*='login'], button:has-text('登录'), text=/登录|注册/").first();
+            if (loginEntry.isVisible()) {
+                return false;
+            }
+            return lagouPage.locator(".user-info, .header__nav__item--user, a[href*='user']")
+                    .first().isVisible();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void checkLagouLoginStatus() {
+        try {
+            boolean loggedIn = checkIfLagouLoggedIn();
+            Boolean previous = loginStatus.get("lagou");
+            if (loggedIn && !Boolean.TRUE.equals(previous)) {
+                setLoginStatus("lagou", true);
+                saveLagouCookiesToDatabase("login success");
+            } else if (!loggedIn && Boolean.TRUE.equals(previous)) {
+                setLoginStatus("lagou", false);
+            }
+        } catch (Exception e) {
+            log.debug("检查拉勾登录状态失败: {}", e.getMessage());
+        }
+    }
+
+    /** 打开拉勾登录页，用户完成站点要求的验证或登录后自动保存 Cookie。 */
+    public void triggerLagouLogin() {
+        gate.run(() -> {
+            if (lagouPage == null) {
+                throw new IllegalStateException("拉勾页面未初始化");
+            }
+            lagouPage.navigate(LAGOU_URL, new Page.NavigateOptions()
+                    .setTimeout(60000).setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+            handleLagouAccessVerification();
+            Locator loginEntry = lagouPage.locator(
+                    "a[href*='login'], button:has-text('登录'), text=/登录|注册/").first();
+            if (loginEntry.isVisible()) {
+                loginEntry.click();
+            }
+            asyncWaitForLagouLogin();
+        });
+    }
+
+    private void handleLagouAccessVerification() {
+        long now = System.currentTimeMillis();
+        if (now < lagouNextVerificationAttemptAtMs) {
+            return;
+        }
+
+        try {
+            lagouVerificationResult = null;
+            lagouVerificationCode = "";
+            if (!dragLagouAccessSliderForVerification()) {
+                if (!isLagouAccessVerificationVisible()) {
+                    resetLagouVerificationRetryState();
+                    return;
+                }
+                scheduleLagouVerificationRetry("滑块尚未就绪");
+                prepareNextLagouChallenge();
+                return;
+            }
+
+            int attempt = ++lagouVerificationAttempts;
+            log.info("已拖动拉勾访问验证滑块，第 {} 次尝试", attempt);
+            Locator slider = lagouPage.locator("#aliyunCaptcha-sliding-slider");
+            boolean failed = false;
+            for (int i = 0; i < 40; i++) {
+                lagouPage.waitForTimeout(250);
+                if (!isLagouAccessVerificationVisible()) {
+                    resetLagouVerificationRetryState();
+                    saveLagouCookiesToDatabase("access verification success");
+                    log.info("拉勾访问验证已通过");
+                    return;
+                }
+                if (Boolean.FALSE.equals(lagouVerificationResult)) {
+                    failed = true;
+                    break;
+                }
+                if (findVisibleLagouVerificationRetry() != null || (i >= 20 && slider.isVisible())) {
+                    failed = true;
+                    break;
+                }
+            }
+
+            if (!failed) {
+                log.warn("拉勾访问验证长时间没有返回结果，本轮结束并等待下次尝试");
+            } else {
+                log.warn("拉勾访问验证未通过: verifyCode={}, failTip={}, errorCode={}, sliderStyle={}",
+                        lagouVerificationCode,
+                        safeLagouText("#aliyunCaptcha-sliding-failTip"),
+                        safeLagouText("#aliyunCaptcha-sliding-errorCode"),
+                        safeLagouAttribute("#aliyunCaptcha-sliding-slider", "style"));
+            }
+            scheduleLagouVerificationRetry(failed ? "站点拒绝本轮验证" : "站点未返回结果");
+            prepareNextLagouChallenge();
+        } catch (Exception e) {
+            log.warn("拉勾访问验证本轮执行异常，稍后继续尝试: {}", e.getMessage());
+            scheduleLagouVerificationRetry("本轮执行异常");
+            reloadLagouVerificationPage();
+            lagouInlineRetries = 0;
+        }
+    }
+
+    private void recordLagouVerificationConsoleMessage(String message) {
+        if (message == null || !message.contains("verifyResult")) {
+            return;
+        }
+        Matcher resultMatcher = LAGOU_VERIFY_RESULT_PATTERN.matcher(message);
+        if (resultMatcher.find()) {
+            lagouVerificationResult = Boolean.parseBoolean(resultMatcher.group(1));
+        }
+        Matcher codeMatcher = LAGOU_VERIFY_CODE_PATTERN.matcher(message);
+        if (codeMatcher.find()) {
+            lagouVerificationCode = codeMatcher.group(1);
+        }
+    }
+
+    static long lagouRetryBackoffMs(int attempt) {
+        int normalizedAttempt = Math.max(1, attempt);
+        return switch (Math.min(normalizedAttempt, 5)) {
+            case 1 -> 30_000L;
+            case 2 -> 60_000L;
+            case 3 -> 120_000L;
+            case 4 -> 300_000L;
+            default -> 600_000L;
+        };
+    }
+
+    private void scheduleLagouVerificationRetry(String reason) {
+        int attempt = Math.max(1, lagouVerificationAttempts);
+        long delay = lagouRetryBackoffMs(attempt);
+        lagouNextVerificationAttemptAtMs = System.currentTimeMillis() + delay;
+        log.warn("拉勾验证第 {} 次未通过（{}），{} 秒后允许下一轮", attempt, reason, delay / 1000);
+    }
+
+    private void prepareNextLagouChallenge() {
+        if (lagouInlineRetries < LAGOU_INLINE_RETRIES_BEFORE_REFRESH
+                && clickLagouVerificationRetry()) {
+            lagouInlineRetries++;
+            return;
+        }
+        reloadLagouVerificationPage();
+        lagouInlineRetries = 0;
+    }
+
+    private void resetLagouVerificationRetryState() {
+        lagouVerificationAttempts = 0;
+        lagouInlineRetries = 0;
+        lagouNextVerificationAttemptAtMs = 0L;
+        lagouVerificationResult = null;
+        lagouVerificationCode = "";
+    }
+
+    private boolean isLagouAccessVerificationVisible() {
+        return lagouPage.locator(LAGOU_ACCESS_VERIFICATION).first().isVisible();
+    }
+
+    private String safeLagouText(String selector) {
+        try {
+            Locator locator = lagouPage.locator(selector);
+            return locator.count() > 0 ? locator.first().textContent() : "";
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private String safeLagouAttribute(String selector, String attribute) {
+        try {
+            Locator locator = lagouPage.locator(selector);
+            return locator.count() > 0 ? locator.first().getAttribute(attribute) : "";
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private Locator findVisibleLagouVerificationRetry() {
+        for (String selector : LAGOU_VERIFICATION_RETRY_SELECTORS) {
+            try {
+                Locator retry = lagouPage.locator(selector).first();
+                if (retry.isVisible()) {
+                    return retry;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private boolean clickLagouVerificationRetry() {
+        Locator retry = findVisibleLagouVerificationRetry();
+        if (retry == null) {
+            return false;
+        }
+        try {
+            retry.click();
+            lagouPage.waitForTimeout(600);
+            log.info("已点击拉勾验证页面中央的重试按钮");
+            return true;
+        } catch (Exception e) {
+            log.warn("点击拉勾验证页内重试按钮失败，将刷新整个页面: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    private void reloadLagouVerificationPage() {
+        log.warn("拉勾验证页内重试仍未通过，刷新整个页面后继续尝试");
+        try {
+            lagouPage.reload(new Page.ReloadOptions()
+                    .setTimeout(60000).setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+        } catch (Exception reloadError) {
+            log.warn("刷新拉勾验证页失败，重新导航后继续尝试: {}", reloadError.getMessage());
+            try {
+                lagouPage.navigate(LAGOU_URL, new Page.NavigateOptions()
+                        .setTimeout(60000).setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+            } catch (Exception navigateError) {
+                log.warn("重新导航拉勾验证页失败，稍后继续尝试: {}", navigateError.getMessage());
+            }
+        }
+        try {
+            lagouPage.waitForTimeout(800);
+        } catch (Exception ignored) {
+        }
+    }
+
+    static boolean dragLagouAccessSlider(Page page) {
+        return dragLagouAccessSlider(page, ThreadLocalRandom.current());
+    }
+
+    private boolean dragLagouAccessSliderForVerification() {
+        if (LAGOU_NATIVE_MOUSE_ENABLED && System.getProperty("os.name", "")
+                .toLowerCase(Locale.ROOT).contains("win")) {
+            try {
+                int attempt = Math.max(1, lagouVerificationAttempts + 1);
+                if (dragLagouAccessSliderWithNativeMouse(
+                        lagouPage, ThreadLocalRandom.current(), attempt)) {
+                    return true;
+                }
+            } catch (Exception e) {
+                log.warn("Windows原生鼠标拖动不可用，回退到Playwright鼠标: {}", e.getMessage());
+            }
+        }
+        return dragLagouAccessSlider(lagouPage);
+    }
+
+    @SuppressWarnings("unchecked")
+    static boolean dragLagouAccessSliderWithNativeMouse(Page page, RandomGenerator random)
+            throws AWTException {
+        return dragLagouAccessSliderWithNativeMouse(page, random, 2);
+    }
+
+    @SuppressWarnings("unchecked")
+    static boolean dragLagouAccessSliderWithNativeMouse(
+            Page page, RandomGenerator random, int attempt) throws AWTException {
+        if (GraphicsEnvironment.isHeadless()) {
+            return false;
+        }
+
+        Locator challenge = page.locator(LAGOU_ACCESS_VERIFICATION).first();
+        for (int i = 0; i < 60 && !challenge.isVisible(); i++) {
+            page.waitForTimeout(250);
+        }
+        if (!challenge.isVisible()) {
+            return false;
+        }
+
+        Locator track = page.locator("#aliyunCaptcha-sliding-body, .nc_scale").first();
+        Locator slider = page.locator(
+                "#aliyunCaptcha-sliding-slider, .nc_scale .btn_slide, .nc_scale .nc_iconfont").first();
+        for (int i = 0; i < 40 && (!track.isVisible() || !slider.isVisible()); i++) {
+            page.waitForTimeout(250);
+        }
+        if (!track.isVisible() || !slider.isVisible()) {
+            return false;
+        }
+
+        var trackBox = track.boundingBox();
+        var sliderBox = slider.boundingBox();
+        if (trackBox == null || sliderBox == null || trackBox.width <= sliderBox.width) {
+            return false;
+        }
+
+        page.bringToFront();
+        page.waitForTimeout(250);
+        Map<String, Number> windowMetrics = (Map<String, Number>) page.evaluate("""
+                () => ({
+                  screenX: window.screenX,
+                  screenY: window.screenY,
+                  outerWidth: window.outerWidth,
+                  outerHeight: window.outerHeight,
+                  innerWidth: window.innerWidth,
+                  innerHeight: window.innerHeight
+                })
+                """);
+        double horizontalBorder = Math.max(0,
+                (number(windowMetrics, "outerWidth") - number(windowMetrics, "innerWidth")) / 2);
+        double viewportScreenX = number(windowMetrics, "screenX") + horizontalBorder;
+        double viewportScreenY = number(windowMetrics, "screenY")
+                + Math.max(0, number(windowMetrics, "outerHeight")
+                - number(windowMetrics, "innerHeight") - horizontalBorder);
+
+        double startX = viewportScreenX + sliderBox.x + sliderBox.width / 2;
+        double y = viewportScreenY + sliderBox.y + sliderBox.height / 2;
+        double endX = viewportScreenX + trackBox.x + trackBox.width - sliderBox.width / 2;
+        Rectangle screenBounds = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+        if (!screenBounds.contains((int) Math.round(startX), (int) Math.round(y))
+                || !screenBounds.contains((int) Math.round(endX), (int) Math.round(y))) {
+            throw new IllegalStateException("换算后的滑块屏幕坐标超出桌面范围");
+        }
+
+        Robot robot = new Robot();
+        robot.setAutoDelay(0);
+        int speedProfile = Math.floorMod(attempt - 1, 3);
+        int baseSteps = switch (speedProfile) {
+            case 0 -> 38;
+            case 1 -> 50;
+            default -> 60;
+        };
+        int steps = clamp((int) Math.round(baseSteps + random.nextGaussian() * 5), 32, 68);
+        double split = clamp(0.52 + random.nextGaussian() * 0.06, 0.4, 0.65);
+        double accelerationPower = clamp(1.95 + random.nextGaussian() * 0.2, 1.5, 2.5);
+        double decelerationPower = clamp(2.15 + random.nextGaussian() * 0.24, 1.6, 2.8);
+        double verticalAmplitude = clamp(0.75 + Math.abs(random.nextGaussian()) * 0.35, 0.65, 1.8);
+
+        double approachStartX = startX - clamp(65 + Math.abs(random.nextGaussian()) * 20, 50, 115);
+        double approachStartY = y + clamp(16 + random.nextGaussian() * 5, 8, 27);
+        moveNativeMouse(robot, approachStartX, approachStartY);
+        sleepNative(logNormalDelay(random, 70, 0.22, 40, 125));
+        int approachSteps = clamp((int) Math.round(10 + random.nextGaussian() * 2), 7, 14);
+        for (int i = 1; i <= approachSteps; i++) {
+            double progress = (double) i / approachSteps;
+            double eased = 1 - Math.pow(1 - progress, 1.7);
+            double arc = Math.sin(Math.PI * progress) * 2.0;
+            moveNativeMouse(robot,
+                    approachStartX + (startX - approachStartX) * eased,
+                    approachStartY + (y - approachStartY) * eased - arc);
+            sleepNative(logNormalDelay(random, 14, 0.22, 8, 27));
+        }
+        moveNativeMouse(robot, startX, y);
+        sleepNative(logNormalDelay(random, 95, 0.22, 60, 165));
+
+        robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
+        try {
+            double holdMedian = switch (speedProfile) {
+                case 0 -> 58;
+                case 1 -> 92;
+                default -> 125;
+            };
+            sleepNative(logNormalDelay(random, holdMedian, 0.2, 40, 190));
+            double verticalNoise = 0;
+            for (int i = 1; i < steps; i++) {
+                double progress = (double) i / steps;
+                double eased = asymmetricEase(
+                        progress, split, accelerationPower, decelerationPower);
+                verticalNoise = verticalNoise * 0.64 + random.nextGaussian() * 0.36;
+                double verticalOffset = clamp(
+                        verticalNoise * verticalAmplitude * Math.sin(Math.PI * progress), -2.0, 2.0);
+                moveNativeMouse(robot, startX + (endX - startX) * eased, y + verticalOffset);
+                double distanceFromFastPoint = Math.abs(progress - split);
+                double localDelay = switch (speedProfile) {
+                    case 0 -> 4.5 + 11 * Math.pow(distanceFromFastPoint, 1.4);
+                    case 1 -> 8 + 22 * Math.pow(distanceFromFastPoint, 1.4);
+                    default -> 11 + 28 * Math.pow(distanceFromFastPoint, 1.4);
+                };
+                sleepNative(logNormalDelay(random, localDelay, 0.24, 3, 58));
+            }
+            double settleBackoff = clamp(0.8 + Math.abs(random.nextGaussian()) * 0.5, 0.5, 2.0);
+            moveNativeMouse(robot, endX - settleBackoff, y + clamp(random.nextGaussian() * 0.25, -0.6, 0.6));
+            sleepNative(logNormalDelay(random, 62, 0.18, 36, 105));
+            moveNativeMouse(robot, endX, y);
+            sleepNative(logNormalDelay(random, 125, 0.2, 75, 210));
+        } finally {
+            robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+        }
+        robot.waitForIdle();
+        String profileName = switch (speedProfile) {
+            case 0 -> "fast";
+            case 1 -> "normal";
+            default -> "slow";
+        };
+        log.info("已使用Windows原生鼠标轨迹: attempt={}, profile={}, steps={}",
+                attempt, profileName, steps);
+        return true;
+    }
+
+    private static double number(Map<String, Number> values, String key) {
+        Number value = values.get(key);
+        return value == null ? 0 : value.doubleValue();
+    }
+
+    private static void moveNativeMouse(Robot robot, double x, double y) {
+        robot.mouseMove((int) Math.round(x), (int) Math.round(y));
+    }
+
+    private static void sleepNative(double milliseconds) {
+        try {
+            Thread.sleep(Math.max(1L, Math.round(milliseconds)));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("原生鼠标拖动被中断", e);
+        }
+    }
+
+    static boolean dragLagouAccessSlider(Page page, RandomGenerator random) {
+        Locator challenge = page.locator(LAGOU_ACCESS_VERIFICATION).first();
+        for (int i = 0; i < 60 && !challenge.isVisible(); i++) {
+            page.waitForTimeout(250);
+        }
+        if (!challenge.isVisible()) {
+            return false;
+        }
+
+        Locator track = page.locator("#aliyunCaptcha-sliding-body, .nc_scale").first();
+        Locator slider = page.locator(
+                "#aliyunCaptcha-sliding-slider, .nc_scale .btn_slide, .nc_scale .nc_iconfont").first();
+        for (int i = 0; i < 40 && (!track.isVisible() || !slider.isVisible()); i++) {
+            page.waitForTimeout(250);
+        }
+        if (!track.isVisible() || !slider.isVisible()) {
+            return false;
+        }
+
+        var trackBox = track.boundingBox();
+        var sliderBox = slider.boundingBox();
+        if (trackBox == null || sliderBox == null || trackBox.width <= sliderBox.width) {
+            return false;
+        }
+
+        double startX = sliderBox.x + sliderBox.width / 2;
+        double y = sliderBox.y + sliderBox.height / 2;
+        double endX = trackBox.x + trackBox.width - sliderBox.width / 2;
+        Mouse mouse = page.mouse();
+        int steps = clamp((int) Math.round(52 + random.nextGaussian() * 7), 38, 72);
+        double accelerationSplit = clamp(0.52 + random.nextGaussian() * 0.07, 0.38, 0.67);
+        double accelerationPower = clamp(2.05 + random.nextGaussian() * 0.24, 1.55, 2.75);
+        double decelerationPower = clamp(2.2 + random.nextGaussian() * 0.28, 1.6, 3.0);
+        double verticalAmplitude = clamp(0.85 + Math.abs(random.nextGaussian()) * 0.42, 0.75, 2.1);
+
+        // 先从滑块左下方以一条轻微弧线接近，避免指针从未知位置单帧跳到滑块中心。
+        double approachStartX = startX - clamp(70 + Math.abs(random.nextGaussian()) * 22, 55, 125);
+        double approachStartY = y + clamp(18 + random.nextGaussian() * 6, 8, 30);
+        mouse.move(approachStartX, approachStartY);
+        page.waitForTimeout(logNormalDelay(random, 75, 0.22, 40, 130));
+        int approachSteps = clamp((int) Math.round(11 + random.nextGaussian() * 2), 8, 15);
+        double approachNoise = 0;
+        for (int i = 1; i <= approachSteps; i++) {
+            double progress = (double) i / approachSteps;
+            double eased = 1 - Math.pow(1 - progress, 1.7);
+            approachNoise = approachNoise * 0.55 + random.nextGaussian() * 0.45;
+            double arc = Math.sin(Math.PI * progress) * clamp(2.2 + random.nextGaussian() * 0.25, 1.5, 3.0);
+            double approachX = approachStartX + (startX - approachStartX) * eased;
+            double approachY = approachStartY + (y - approachStartY) * eased
+                    - arc + clamp(approachNoise * 0.35, -0.65, 0.65);
+            mouse.move(approachX, approachY);
+            page.waitForTimeout(logNormalDelay(random, 15, 0.25, 8, 30));
+        }
+        mouse.move(startX, y + clamp(random.nextGaussian() * 0.18, -0.35, 0.35));
+        page.waitForTimeout(logNormalDelay(random, 105, 0.24, 65, 190));
+        mouse.down();
+        try {
+            page.waitForTimeout(logNormalDelay(random, 115, 0.22, 65, 210));
+            double verticalNoise = 0;
+            for (int i = 1; i < steps; i++) {
+                double progress = (double) i / steps;
+                double eased = asymmetricEase(
+                        progress,
+                        accelerationSplit,
+                        accelerationPower,
+                        decelerationPower);
+                verticalNoise = verticalNoise * 0.62 + random.nextGaussian() * 0.38;
+                double edgeDamping = Math.sin(Math.PI * progress);
+                double verticalOffset = clamp(
+                        verticalNoise * verticalAmplitude * edgeDamping,
+                        -2.4,
+                        2.4);
+                mouse.move(startX + (endX - startX) * eased,
+                        y + verticalOffset);
+
+                double distanceFromFastPoint = Math.abs(progress - accelerationSplit);
+                double localBaseDelay = 11 + 28 * Math.pow(distanceFromFastPoint, 1.45);
+                page.waitForTimeout(logNormalDelay(random, localBaseDelay, 0.27, 6, 60));
+            }
+
+            double settleBackoff = clamp(0.7 + Math.abs(random.nextGaussian()) * 0.55, 0.5, 2.2);
+            double settleY = clamp(random.nextGaussian() * 0.3, -0.7, 0.7);
+            mouse.move(endX - settleBackoff, y + settleY);
+            page.waitForTimeout(logNormalDelay(random, 72, 0.2, 38, 135));
+            mouse.move(endX, y);
+            page.waitForTimeout(logNormalDelay(random, 165, 0.22, 95, 285));
+        } finally {
+            mouse.up();
+        }
+        return true;
+    }
+
+    private static double asymmetricEase(
+            double progress,
+            double split,
+            double accelerationPower,
+            double decelerationPower) {
+        if (progress <= split) {
+            double local = progress / split;
+            return split * Math.pow(local, accelerationPower);
+        }
+        double local = (progress - split) / (1 - split);
+        return split + (1 - split) * (1 - Math.pow(1 - local, decelerationPower));
+    }
+
+    private static double logNormalDelay(
+            RandomGenerator random,
+            double median,
+            double sigma,
+            double minimum,
+            double maximum) {
+        return clamp(median * Math.exp(random.nextGaussian() * sigma), minimum, maximum);
+    }
+
+    private static int clamp(int value, int minimum, int maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
+    }
+
+    private static double clamp(double value, double minimum, double maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
+    }
+
+    private void asyncWaitForLagouLogin() {
+        Thread thread = new Thread(() -> {
+            for (int i = 0; i < 300; i++) {
+                if (gate.call(this::checkIfLagouLoggedIn)) {
+                    gate.run(() -> {
+                        setLoginStatus("lagou", true);
+                        saveLagouCookiesToDatabase("login success");
+                    });
+                    return;
+                }
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }, "lagou-login-waiter");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void saveLagouCookiesToDatabase(String remark) {
+        try {
+            List<Cookie> cookies = filterCookiesByDomain(context.cookies(), LAGOU_DOMAIN);
+            String cookieJson = new ObjectMapper().writeValueAsString(cookies);
+            cookieService.saveOrUpdateCookie("lagou", cookieJson, remark);
+            log.info("保存拉勾 Cookie 成功，共 {} 条；完整浏览器会话由 Profile 持久化，remark={}",
+                    cookies.size(), remark);
+        } catch (Exception e) {
+            log.warn("保存拉勾 Cookie 失败: {}", e.getMessage());
+        }
+    }
+
+    public void saveLagouCookiesToDb(String remark) {
+        gate.run(() -> saveLagouCookiesToDatabase(remark));
+    }
+
+    public void clearLagouCookies() {
+        gate.run(() -> {
+            if (context != null) {
+                context.clearCookies();
+            }
+        });
+    }
+
+    public void pauseLagouMonitoring() {
+        lagouMonitoringPaused = true;
+    }
+
+    public void resumeLagouMonitoring() {
+        lagouMonitoringPaused = false;
     }
 
     /**
@@ -1523,8 +2607,16 @@ public class PlaywrightManager {
             if (job51Page != null && !job51MonitoringPaused) {
                 check51jobLoginStatus(job51Page);
             }
-            if (zhilianPage != null && !zhilianMonitoringPaused) {
-                checkZhilianLoginStatus(zhilianPage);
+            Page liveZhilianPage = resolveLiveZhilianPage(false);
+            if (liveZhilianPage != null && !zhilianMonitoringPaused) {
+                checkZhilianLoginStatus(liveZhilianPage);
+            }
+            if (lagouPage != null && !lagouMonitoringPaused) {
+                if (lagouPage.locator(LAGOU_ACCESS_VERIFICATION).first().isVisible()) {
+                    handleLagouAccessVerification();
+                } else {
+                    checkLagouLoginStatus();
+                }
             }
         } catch (Exception e) {
             log.debug("定时登录检测异常: {}", e.getMessage());
@@ -1577,17 +2669,25 @@ public class PlaywrightManager {
                 zhilianPage.close();
                 log.info("智联招聘页面已关闭");
             }
+            if (lagouPage != null) {
+                lagouPage.close();
+                log.info("拉勾页面已关闭");
+            }
 
-            // 关闭共享的BrowserContext
-            if (context != null) {
+            // 持久化上下文关闭时会把完整站点状态写回 Profile，并同时关闭其浏览器。
+            if (context != null && !connectedOverCdp) {
                 context.close();
                 log.info("共享BrowserContext已关闭");
             }
 
-            if (browser != null) {
+            if (browser != null && connectedOverCdp) {
+                browser.close();
+                log.info("Chrome CDP连接已关闭");
+            } else if (browser != null && !persistentBrowserContext) {
                 browser.close();
                 log.info("浏览器已关闭");
             }
+            stopChromeProcess();
 
             if (playwright != null) {
                 playwright.close();
@@ -1616,7 +2716,8 @@ public class PlaywrightManager {
             case "boss" -> bossPage != null;
             case "liepin" -> liepinPage != null;
             case "51job" -> job51Page != null;
-            case "zhilian" -> zhilianPage != null;
+            case "zhilian" -> gate.call(() -> resolveLiveZhilianPage(false) != null);
+            case "lagou" -> lagouPage != null;
             default -> throw new IllegalArgumentException("Unsupported platform: " + platform);
         };
     }
@@ -1627,7 +2728,8 @@ public class PlaywrightManager {
                 case "boss" -> bossPage;
                 case "liepin" -> liepinPage;
                 case "51job" -> job51Page;
-                case "zhilian" -> zhilianPage;
+                case "zhilian" -> resolveLiveZhilianPage(false);
+                case "lagou" -> lagouPage;
                 default -> throw new IllegalArgumentException("Unsupported platform: " + platform);
             };
             if (page == null) {
@@ -1637,11 +2739,46 @@ public class PlaywrightManager {
         });
     }
 
+    public Map<String, Object> getZhilianSessionStatus() {
+        Map<String, Object> status = new java.util.LinkedHashMap<>();
+        status.put("loginState", zhilianLoginState);
+        status.put("pageState", zhilianPageState);
+        status.put("pageAlive", "CONNECTED".equals(zhilianPageState));
+        status.put("pageUrl", zhilianPageUrl);
+        status.put("message", zhilianStateMessage);
+        status.put("lastCheckedAt", zhilianLastCheckedAt);
+        return status;
+    }
+
+    public boolean refreshZhilianLoginStatus() {
+        return gate.call(() -> {
+            Page page = resolveLiveZhilianPage(false);
+            if (page == null) {
+                zhilianLoginState = ZhilianLoginState.UNKNOWN.name();
+                return false;
+            }
+            checkZhilianLoginStatus(page);
+            return isLoggedIn("zhilian");
+        });
+    }
+
     public Map<String, String> testBossNavigation() {
         return withPage("boss", page -> {
             page.navigate(BOSS_URL);
             return Map.of("title", page.title(), "url", page.url());
         });
+    }
+
+    public Map<String, Object> getLagouPageStatus() {
+        return withPage("lagou", page -> Map.of(
+                "url", page.url(),
+                "title", page.title(),
+                "accessVerificationVisible",
+                page.locator(LAGOU_ACCESS_VERIFICATION).first().isVisible(),
+                "verificationCode", lagouVerificationCode,
+                "verificationAttempts", lagouVerificationAttempts,
+                "nextVerificationAttemptAt", lagouNextVerificationAttemptAtMs
+        ));
     }
 
     /**
@@ -1680,6 +2817,14 @@ public class PlaywrightManager {
      */
     public void setLoginStatus(String platform, boolean isLoggedIn) {
         Boolean previousStatus = loginStatus.get(platform);
+
+        if ("zhilian".equals(platform)) {
+            zhilianLoginState = isLoggedIn
+                    ? ZhilianLoginState.LOGGED_IN.name()
+                    : ("CONNECTED".equals(zhilianPageState)
+                    ? ZhilianLoginState.LOGGED_OUT.name()
+                    : ZhilianLoginState.UNKNOWN.name());
+        }
 
         // 只有状态真正发生变化时才更新和通知
         if (previousStatus == null || previousStatus != isLoggedIn) {

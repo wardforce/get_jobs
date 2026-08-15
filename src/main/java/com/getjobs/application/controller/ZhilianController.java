@@ -99,10 +99,12 @@ public class ZhilianController {
         Map<String, Object> response = new HashMap<>();
 
         try {
+            playwrightManager.refreshZhilianLoginStatus();
             boolean isLoggedIn = playwrightManager.isLoggedIn("zhilian");
             response.put("success", true);
             response.put("isLoggedIn", isLoggedIn);
             response.put("message", isLoggedIn ? "已登录" : "未登录");
+            response.putAll(playwrightManager.getZhilianSessionStatus());
 
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -271,11 +273,22 @@ public class ZhilianController {
         Map<String, Object> response = new HashMap<>();
 
         try {
+            playwrightManager.refreshZhilianLoginStatus();
+            Map<String, Object> sessionStatus = playwrightManager.getZhilianSessionStatus();
+            if (!"CONNECTED".equals(sessionStatus.get("pageState"))) {
+                response.put("success", false);
+                response.put("message", "智联页面正在重新连接，请稍后再试");
+                response.put("status", "page_unavailable");
+                response.putAll(sessionStatus);
+                return ResponseEntity.status(409).body(response);
+            }
+
             // 未登录则不允许启动
             if (!playwrightManager.isLoggedIn("zhilian")) {
                 response.put("success", false);
                 response.put("message", "请先登录智联招聘");
                 response.put("status", "not_logged_in");
+                response.putAll(sessionStatus);
                 return ResponseEntity.badRequest().body(response);
             }
 

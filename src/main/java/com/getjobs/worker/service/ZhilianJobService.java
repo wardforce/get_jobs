@@ -4,6 +4,7 @@ import com.getjobs.application.service.ConfigService;
 import com.getjobs.worker.dto.JobProgressMessage;
 import com.getjobs.worker.manager.PlaywrightManager;
 import com.getjobs.worker.zhilian.ZhiLian;
+import com.getjobs.worker.zhilian.ZhilianAuthenticationExpiredException;
 import com.getjobs.worker.zhilian.ZhilianConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +48,7 @@ public class ZhilianJobService implements JobPlatformService {
             }
 
             // 检查是否已登录
+            playwrightManager.refreshZhilianLoginStatus();
             if (!playwrightManager.isLoggedIn(PLATFORM)) {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "请先登录智联招聘"));
                 return;
@@ -86,6 +88,13 @@ public class ZhilianJobService implements JobPlatformService {
 
             progressCallback.accept(JobProgressMessage.success(PLATFORM,
                 String.format("投递任务完成，共投递%d个职位", deliveredCount)));
+        } catch (ZhilianAuthenticationExpiredException e) {
+            playwrightManager.setLoginStatus(PLATFORM, false);
+            progressCallback.accept(JobProgressMessage.error(
+                    PLATFORM,
+                    "智联招聘登录状态已失效，请重新登录",
+                    "ZHILIAN_COOKIE_EXPIRED"
+            ));
         } catch (Exception e) {
             log.error("智联招聘投递任务执行失败", e);
             progressCallback.accept(JobProgressMessage.error(PLATFORM, "投递失败: " + e.getMessage()));
@@ -112,7 +121,9 @@ public class ZhilianJobService implements JobPlatformService {
         Map<String, Object> status = new HashMap<>();
         status.put("platform", PLATFORM);
         status.put("isRunning", isRunning);
+        playwrightManager.refreshZhilianLoginStatus();
         status.put("isLoggedIn", playwrightManager.isLoggedIn(PLATFORM));
+        status.putAll(playwrightManager.getZhilianSessionStatus());
         return status;
     }
 

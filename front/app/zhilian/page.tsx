@@ -21,9 +21,18 @@ interface ZhilianConfig {
 
 interface Option { name: string; code: string }
 interface ZhilianOptions { city: Option[] }
+type ZhilianPageState = 'CONNECTED' | 'RECOVERING' | 'MISSING'
+type ZhilianLoginState = 'LOGGED_IN' | 'LOGGED_OUT' | 'UNKNOWN'
+interface ZhilianSessionStatusPayload {
+  pageState?: string
+  loginState?: string
+  isLoggedIn?: boolean
+}
 
 export default function ZhilianPage() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [pageState, setPageState] = useState<ZhilianPageState>('MISSING')
+  const [loginState, setLoginState] = useState<ZhilianLoginState>('UNKNOWN')
   const [isDelivering, setIsDelivering] = useState(false)
   const [checkingLogin, setCheckingLogin] = useState(true)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
@@ -34,6 +43,18 @@ export default function ZhilianPage() {
   const [config, setConfig] = useState<ZhilianConfig>({ keywords: '', cityCode: '', salary: '' })
   const [options, setOptions] = useState<ZhilianOptions>({ city: [] })
   const [loadingConfig, setLoadingConfig] = useState(true)
+
+  const applySessionStatus = (data: ZhilianSessionStatusPayload) => {
+    if (typeof data.pageState === 'string') {
+      setPageState(data.pageState as ZhilianPageState)
+    }
+    if (typeof data.loginState === 'string') {
+      setLoginState(data.loginState as ZhilianLoginState)
+    }
+    if (typeof data.isLoggedIn === 'boolean') {
+      setIsLoggedIn(data.isLoggedIn)
+    }
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof EventSource === 'undefined') {
@@ -56,7 +77,7 @@ export default function ZhilianPage() {
               const data = JSON.parse(event.data)
               console.log('[智联招聘 SSE] connected事件数据:', data)
               console.log('[智联招聘 SSE] zhilianLoggedIn状态:', data.zhilianLoggedIn)
-              setIsLoggedIn(data.zhilianLoggedIn || false)
+              applySessionStatus({ ...data, isLoggedIn: data.zhilianLoggedIn })
               setCheckingLogin(false)
             } catch (error) {
               console.error('[智联招聘 SSE] 解析连接消息失败:', error)
@@ -71,7 +92,7 @@ export default function ZhilianPage() {
               console.log('[智联招聘 SSE] login-status事件数据:', data)
               if (data.platform === 'zhilian') {
                 console.log('[智联招聘 SSE] 智联登录状态变更:', data.isLoggedIn)
-                setIsLoggedIn(data.isLoggedIn)
+                applySessionStatus(data)
                 setCheckingLogin(false)
               }
             } catch (error) {
@@ -147,6 +168,37 @@ export default function ZhilianPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const syncDeliveryStatus = async () => {
+      try {
+        const response = await fetch('http://localhost:8888/api/zhilian/status', {
+          method: 'GET',
+          cache: 'no-store',
+        })
+        if (!response.ok) return
+
+        const data = await response.json()
+        if (!cancelled && data.success) {
+          setIsDelivering(Boolean(data.isRunning))
+          applySessionStatus(data)
+          setCheckingLogin(false)
+        }
+      } catch {
+        // 后端暂时不可用时保留当前按钮状态，下一轮轮询会继续同步。
+      }
+    }
+
+    void syncDeliveryStatus()
+    const timer = window.setInterval(syncDeliveryStatus, 1500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
   const handleStartDelivery = async () => {
     try {
       setIsDelivering(true)
@@ -155,6 +207,20 @@ export default function ZhilianPage() {
       if (!data.success) setIsDelivering(false)
     } catch {
       setIsDelivering(false)
+    }
+  }
+
+  const handleOpenLogin = async () => {
+    try {
+      setPageState('RECOVERING')
+      setCheckingLogin(true)
+      const response = await fetch('http://localhost:8888/api/zhilian/login', { method: 'POST' })
+      const data = await response.json()
+      if (!data.success) setPageState('MISSING')
+    } catch {
+      setPageState('MISSING')
+    } finally {
+      setCheckingLogin(false)
     }
   }
 
@@ -171,6 +237,7 @@ export default function ZhilianPage() {
       const response = await fetch('http://localhost:8888/api/zhilian/logout', { method: 'POST' })
       const data = await response.json()
       setIsLoggedIn(false)
+      setLoginState('LOGGED_OUT')
       setLogoutResult({ success: data.success, message: data.success ? '已退出登录，Cookie已清空。' : data.message })
       setShowLogoutResultDialog(true)
     } catch {
@@ -216,9 +283,21 @@ export default function ZhilianPage() {
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
                 <BiPlay className="mr-1" /> 检查登录中...
               </Button>
-            ) : !isLoggedIn ? (
+            ) : pageState === 'RECOVERING' ? (
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
-                <BiPlay className="mr-1" /> 请先登录智联招聘
+                <BiPlay className="mr-1" /> 正在重新连接智联页面…
+              </Button>
+            ) : pageState === 'MISSING' ? (
+              <Button onClick={handleOpenLogin} size="sm" className="rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+                <BiPlay className="mr-1" /> 重新连接智联招聘
+              </Button>
+            ) : loginState === 'UNKNOWN' ? (
+              <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
+                <BiPlay className="mr-1" /> 正在确认登录状态…
+              </Button>
+            ) : !isLoggedIn ? (
+              <Button onClick={handleOpenLogin} size="sm" className="rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+                <BiPlay className="mr-1" /> 打开智联登录
               </Button>
             ) : isDelivering ? (
               <Button onClick={handleStopDelivery} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">

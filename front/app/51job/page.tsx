@@ -273,6 +273,35 @@ export default function Job51Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const syncDeliveryStatus = async () => {
+      try {
+        const response = await fetch(`${API}/api/51job/status`, {
+          method: 'GET',
+          cache: 'no-store',
+        })
+        if (!response.ok) return
+
+        const data = await response.json()
+        if (!cancelled && data.success) {
+          setIsDelivering(Boolean(data.isRunning))
+        }
+      } catch {
+        // 后端暂时不可用时保留当前按钮状态，下一轮轮询会继续同步。
+      }
+    }
+
+    void syncDeliveryStatus()
+    const timer = window.setInterval(syncDeliveryStatus, 1500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
   const handleStartDelivery = async () => {
     try {
       setIsDelivering(true)

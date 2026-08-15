@@ -32,7 +32,7 @@
                  │ HTTP / SSE
                  ▼
 ┌──────────────────────────────────────────┐
-│ 后端层（API） - Spring Boot 3.5.7, port=8888 │
+│ 后端层（API） - Spring Boot 3.5.7, port=8890 │
 │  - 任务调度、数据库访问、状态推送        │
 │  - 整合 Worker 模块执行自动化逻辑        │
 │  - 提供 REST / SSE 接口供前端使用        │
@@ -79,7 +79,7 @@
 | **SSE 模块**           | Spring MVC SSEEmitter                            | 向前端推送任务状态           |
 | **ConfigService**    | 统一管理 API Key / Cookie / Token 等敏感配置              |                     |
 
-**端口：** `8888`
+**端口：** `8890`
 **职责：**
 
 * 提供统一任务入口；
@@ -293,11 +293,11 @@ SSE 推送前端 ▶ 前端刷新任务状态
 - Embedded 模式（嵌入式）：
   - Next.js 采用 `next export` 生成纯静态产物。
   - 产物拷贝至 Spring Boot `classpath:/static/app/`（或 `public/app/`）。
-  - 访问 `http://<host>:8888/app/` 即可打开 UI，前端通过相对路径访问同源 API/SSE。
+  - 访问 `http://<host>:8890/app/` 即可打开 UI，前端通过相对路径访问同源 API/SSE。
 
 - External 模式（外置式）：
   - 开发时运行 `next dev`（如 `http://localhost:6680`）。
-  - 前端通过代理将 `/com.getjobs.run.api/*` 转发到 `http://localhost:8888`，避免跨域与 CORS 配置复杂度。
+  - 前端通过代理将 `/com.getjobs.run.api/*` 转发到 `http://localhost:8890`，避免跨域与 CORS 配置复杂度。
   - 生产也可选择将静态站点部署在任意静态服务器上，配置环境变量指向 API。
 
 ### 12.3 路由与资源策略
@@ -309,14 +309,14 @@ SSE 推送前端 ▶ 前端刷新任务状态
 ### 12.4 API Base 选择策略
 
 - 默认同源：UI 通过相对路径 `/com.getjobs.run.api/...` 调用后端。
-- 开发或外置部署：读取 `NEXT_PUBLIC_API_BASE` 指定 API 根地址（例如 `http://localhost:8888`）。
+- 开发或外置部署：读取 `NEXT_PUBLIC_API_BASE` 指定 API 根地址（例如 `http://localhost:8890`）。
 - 代码中封装 `getApiBase()`：优先环境变量，否则回退 `window.location.origin`。
 
 ### 12.5 开发模式建议
 
-- 启动 Spring Boot（:8888）。
+- 启动 Spring Boot（:8890）。
 - 启动 Next.js dev（:6680 或 :3000），在 `next.config.js` 中配置代理：
-  - 将 `/com.getjobs.run.api/:path*` 重写到 `http://localhost:8888/com.getjobs.run.api/:path*`；SSE 路径同理。
+  - 将 `/com.getjobs.run.api/:path*` 重写到 `http://localhost:8890/com.getjobs.run.api/:path*`；SSE 路径同理。
 - Spring Boot 开启仅开发可用的 CORS（允许本地前端源）。
 
 ### 12.6 部署模式建议（嵌入式）

@@ -74,5 +74,5 @@ tasks.named<BootRun>("bootRun") {
     // 示例：把当天日期传给日志或应用
     systemProperty("LOG_DATE", LocalDate.now().toString())
     // 可选：对齐端口
-    // systemProperty("server.port", "8888")
+    // systemProperty("server.port", "8890")
 }

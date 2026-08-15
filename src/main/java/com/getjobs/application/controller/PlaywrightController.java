@@ -31,8 +31,13 @@ public class PlaywrightController {
         Map<String, Object> status = new HashMap<>();
         status.put("initialized", playwrightManager.isInitialized());
         status.put("hasBossPage", playwrightManager.hasPage("boss"));
+        status.put("hasLagouPage", playwrightManager.hasPage("lagou"));
         status.put("hasBrowser", playwrightManager.hasBrowser());
         status.put("bossLoggedIn", playwrightManager.isLoggedIn("boss"));
+        status.put("lagouLoggedIn", playwrightManager.isLoggedIn("lagou"));
+        if (playwrightManager.hasPage("lagou")) {
+            status.put("lagouPage", playwrightManager.getLagouPageStatus());
+        }
 
         return ResponseEntity.ok(status);
     }

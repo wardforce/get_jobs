@@ -14,7 +14,7 @@ From the repository root:
 
 ```powershell
 .\gradlew.bat test       # Run backend tests on JUnit Platform
-.\gradlew.bat bootRun    # Start the Spring Boot service on port 8888
+.\gradlew.bat bootRun    # Start the Spring Boot service on port 8890
 ```
 
 For the frontend:

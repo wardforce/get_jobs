@@ -113,16 +113,17 @@ public class JobController {
             boolean liepinLoggedIn = playwrightManager.isLoggedIn("liepin");
             boolean job51LoggedIn = playwrightManager.isLoggedIn("51job");
             boolean zhilianLoggedIn = playwrightManager.isLoggedIn("zhilian");
+            Map<String, Object> connectedStatus = new HashMap<>();
+            connectedStatus.put("message", "已连接到登录状态推送");
+            connectedStatus.put("bossLoggedIn", bossLoggedIn);
+            connectedStatus.put("liepinLoggedIn", liepinLoggedIn);
+            connectedStatus.put("job51LoggedIn", job51LoggedIn);
+            connectedStatus.put("zhilianLoggedIn", zhilianLoggedIn);
+            connectedStatus.putAll(playwrightManager.getZhilianSessionStatus());
 
             emitter.send(SseEmitter.event()
                     .name("connected")
-                    .data(Map.of(
-                            "message", "已连接到登录状态推送",
-                            "bossLoggedIn", bossLoggedIn,
-                            "liepinLoggedIn", liepinLoggedIn,
-                            "job51LoggedIn", job51LoggedIn,
-                            "zhilianLoggedIn", zhilianLoggedIn
-                    )));
+                    .data(connectedStatus));
         } catch (IOException e) {
             log.error("发送SSE连接消息失败", e);
         }
@@ -157,13 +158,16 @@ public class JobController {
         List<SseEmitter> deadEmitters = new CopyOnWriteArrayList<>();
         for (SseEmitter emitter : loginStatusEmitters) {
             try {
+                Map<String, Object> statusData = new HashMap<>();
+                statusData.put("platform", change.platform());
+                statusData.put("isLoggedIn", change.isLoggedIn());
+                statusData.put("timestamp", change.timestamp());
+                if ("zhilian".equals(change.platform())) {
+                    statusData.putAll(playwrightManager.getZhilianSessionStatus());
+                }
                 emitter.send(SseEmitter.event()
                         .name("login-status")
-                        .data(objectMapper.writeValueAsString(Map.of(
-                                "platform", change.platform(),
-                                "isLoggedIn", change.isLoggedIn(),
-                                "timestamp", change.timestamp()
-                        ))));
+                        .data(objectMapper.writeValueAsString(statusData)));
             } catch (Exception e) {
                 if (e instanceof AsyncRequestNotUsableException ||
                         e instanceof ClientAbortException ||

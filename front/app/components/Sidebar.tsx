@@ -73,6 +73,7 @@ export default function Sidebar() {
     { href: '/liepin', icon: BiSearch, label: '猎聘', color: 'text-purple-300' },
     { href: '/51job', icon: BiTask, label: '51job', color: 'text-blue-300' },
     { href: '/zhilian', icon: BiUserCircle, label: '智联招聘', color: 'text-cyan-300' },
+    { href: '/lagou', icon: BiSearch, label: '拉勾', color: 'text-pink-300' },
   ]
 
   return (
