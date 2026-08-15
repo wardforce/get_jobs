@@ -32,13 +32,13 @@ class ExtensionErrorFilterTest {
                       error: new Error('addListener')
                     }));
                     window.dispatchEvent(new ErrorEvent('error', {
-                      filename: 'http://localhost:6867/app.js',
+                      filename: 'http://localhost:6866/app.js',
                       error: new Error('application error')
                     }));
                     """);
 
             assertEquals(1, ((Number) page.evaluate("window.observedErrors.length")).intValue());
-            assertEquals("http://localhost:6867/app.js", page.evaluate("window.observedErrors[0]"));
+            assertEquals("http://localhost:6866/app.js", page.evaluate("window.observedErrors[0]"));
         }
     }
 }
