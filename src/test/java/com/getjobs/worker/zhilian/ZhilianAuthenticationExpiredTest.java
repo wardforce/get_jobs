@@ -58,7 +58,7 @@ class ZhilianAuthenticationExpiredTest {
         when(manager.isLoggedIn("zhilian")).thenReturn(true);
         when(configService.getZhilianConfig()).thenReturn(new ZhilianConfig());
         doThrow(new ZhilianAuthenticationExpiredException("expired"))
-                .when(manager).withPage(eq("zhilian"), any());
+                .when(manager).withDeliveryPage(eq("zhilian"), any());
 
         ZhilianJobService service = new ZhilianJobService(manager, zhilianProvider, configService);
         List<JobProgressMessage> messages = new ArrayList<>();

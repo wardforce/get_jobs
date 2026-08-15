@@ -34,6 +34,7 @@ export default function ZhilianPage() {
   const [pageState, setPageState] = useState<ZhilianPageState>('MISSING')
   const [loginState, setLoginState] = useState<ZhilianLoginState>('UNKNOWN')
   const [isDelivering, setIsDelivering] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
   const [checkingLogin, setCheckingLogin] = useState(true)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -181,7 +182,9 @@ export default function ZhilianPage() {
 
         const data = await response.json()
         if (!cancelled && data.success) {
+          const running = Boolean(data.isRunning)
           setIsDelivering(Boolean(data.isRunning))
+          if (!running) setIsStopping(false)
           applySessionStatus(data)
           setCheckingLogin(false)
         }
@@ -201,6 +204,7 @@ export default function ZhilianPage() {
 
   const handleStartDelivery = async () => {
     try {
+      setIsStopping(false)
       setIsDelivering(true)
       const response = await fetch('http://localhost:8888/api/zhilian/start', { method: 'POST' })
       const data = await response.json()
@@ -226,10 +230,13 @@ export default function ZhilianPage() {
 
   const handleStopDelivery = async () => {
     try {
+      setIsStopping(true)
       const response = await fetch('http://localhost:8888/api/zhilian/stop', { method: 'POST' })
       const data = await response.json()
-      if (data.success) setIsDelivering(false)
-    } catch {}
+      if (!data.success) setIsStopping(false)
+    } catch {
+      setIsStopping(false)
+    }
   }
 
   const triggerLogout = async () => {
@@ -279,7 +286,11 @@ export default function ZhilianPage() {
         accentBgClass="bg-purple-500"
         actions={
           <div className="flex items-center gap-2">
-            {checkingLogin ? (
+            {isDelivering ? (
+              <Button onClick={handleStopDelivery} disabled={isStopping} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+                <BiStop className="mr-1" /> {isStopping ? '正在停止...' : '正在投递，点击停止'}
+              </Button>
+            ) : checkingLogin ? (
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
                 <BiPlay className="mr-1" /> 检查登录中...
               </Button>
@@ -298,10 +309,6 @@ export default function ZhilianPage() {
             ) : !isLoggedIn ? (
               <Button onClick={handleOpenLogin} size="sm" className="rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
                 <BiPlay className="mr-1" /> 打开智联登录
-              </Button>
-            ) : isDelivering ? (
-              <Button onClick={handleStopDelivery} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
-                <BiStop className="mr-1" /> 停止投递
               </Button>
             ) : (
               <Button onClick={handleStartDelivery} size="sm" className="rounded-full bg-gradient-to-r from-teal-500 to-green-500 hover:from-teal-600 hover:to-green-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">

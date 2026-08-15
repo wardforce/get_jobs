@@ -24,7 +24,7 @@ import java.util.function.Consumer;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class LiepinJobService implements JobPlatformService {
+public class LiepinJobService extends InterruptibleJobPlatformService {
 
     private static final String PLATFORM = "liepin";
 
@@ -32,19 +32,8 @@ public class LiepinJobService implements JobPlatformService {
     private final ConfigService configService;
     private final ObjectProvider<Liepin> liepinProvider;
 
-    // 运行状态标志
-    private volatile boolean isRunning = false;
-
-    // 停止请求标志
-    private volatile boolean shouldStop = false;
-
     @Override
-    public void executeDelivery(Consumer<JobProgressMessage> progressCallback) {
-        if (isRunning) {
-            progressCallback.accept(JobProgressMessage.warning(PLATFORM, "任务已在运行中"));
-            return;
-        }
-
+    protected void doExecuteDelivery(Consumer<JobProgressMessage> progressCallback) {
         try {
             if (!playwrightManager.hasPage(PLATFORM)) {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "猎聘页面未初始化"));
@@ -55,9 +44,6 @@ public class LiepinJobService implements JobPlatformService {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "请先登录猎聘"));
                 return;
             }
-
-            isRunning = true;
-            shouldStop = false;
 
             // 暂停后台登录监控，避免并发访问冲突
             playwrightManager.pauseLiepinMonitoring();
@@ -77,7 +63,7 @@ public class LiepinJobService implements JobPlatformService {
                 }
             };
 
-            int deliveredCount = playwrightManager.withPage(PLATFORM, page -> {
+            int deliveredCount = playwrightManager.withDeliveryPage(PLATFORM, page -> {
                 Liepin liepin = liepinProvider.getObject();
                 liepin.setPage(page);
                 liepin.setConfig(config);
@@ -87,28 +73,24 @@ public class LiepinJobService implements JobPlatformService {
                 return liepin.execute();
             });
 
-            progressCallback.accept(JobProgressMessage.success(PLATFORM,
-                String.format("投递任务完成，共发起%d个聊天", deliveredCount)));
+            if (shouldStop()) {
+                progressCallback.accept(JobProgressMessage.warning(PLATFORM, "猎聘投递任务已停止"));
+            } else {
+                progressCallback.accept(JobProgressMessage.success(PLATFORM,
+                    String.format("投递任务完成，共发起%d个聊天", deliveredCount)));
+            }
         } catch (Exception e) {
-            log.error("猎聘投递任务执行失败", e);
-            progressCallback.accept(JobProgressMessage.error(PLATFORM, "投递失败: " + e.getMessage()));
+            if (shouldStop()) {
+                progressCallback.accept(JobProgressMessage.warning(PLATFORM, "猎聘投递任务已停止"));
+            } else {
+                log.error("猎聘投递任务执行失败", e);
+                progressCallback.accept(JobProgressMessage.error(PLATFORM, "投递失败: " + e.getMessage()));
+            }
         } finally {
-            isRunning = false;
-            shouldStop = false;
             try {
                 playwrightManager.resumeLiepinMonitoring();
             } catch (Exception ignored) {}
         }
-    }
-
-    @Override
-    public void stopDelivery() {
-        if (!isRunning) {
-            log.warn("猎聘任务未在运行，无需停止");
-            return;
-        }
-        log.info("收到停止猎聘任务请求");
-        shouldStop = true;
     }
 
     /**
@@ -118,7 +100,7 @@ public class LiepinJobService implements JobPlatformService {
     public Map<String, Object> getStatus() {
         Map<String, Object> status = new HashMap<>();
         status.put("platform", PLATFORM);
-        status.put("isRunning", isRunning);
+        status.put("isRunning", isRunning());
         status.put("isLoggedIn", playwrightManager.isLoggedIn(PLATFORM));
         status.put("maxDeliveryAttempts", DeliveryLimit.configuredMax());
         return status;
@@ -129,14 +111,4 @@ public class LiepinJobService implements JobPlatformService {
         return PLATFORM;
     }
 
-    @Override
-    public boolean isRunning() {
-        return isRunning;
-    }
-
-    public boolean shouldStop() {
-        return shouldStop;
-    }
-
-    
 }

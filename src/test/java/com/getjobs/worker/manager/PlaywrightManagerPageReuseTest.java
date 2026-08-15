@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -14,6 +15,19 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class PlaywrightManagerPageReuseTest {
+    @Test
+    void findsTopLevelPlatformPageForAnIsolatedDeliveryConnection() {
+        BrowserContext context = mock(BrowserContext.class);
+        Page topLevel = page("https://we.51job.com/pc/search");
+        Page popup = page("https://we.51job.com/pc/job/detail");
+        when(popup.opener()).thenReturn(topLevel);
+        when(context.pages()).thenReturn(List.of(popup, topLevel));
+
+        PlaywrightManager manager = new PlaywrightManager();
+
+        assertSame(topLevel, manager.findPlatformPage(context, "51job"));
+    }
+
 
     @Test
     void reusesRestoredPlatformPagesAndClosesDuplicatesInsteadOfOpeningAnotherGroup() {
@@ -61,7 +75,7 @@ class PlaywrightManagerPageReuseTest {
         Page boss = page("https://www.zhipin.com/");
         Page blank = page("about:blank");
         Page job51 = page("about:blank");
-        Page zhilian = page("about:blank");
+        Page zhilian = page("https://www.zhaopin.com/");
         Page lagou = page("about:blank");
         when(context.pages()).thenReturn(List.of(boss, blank));
         when(context.newPage()).thenReturn(job51, zhilian, lagou);

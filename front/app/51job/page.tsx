@@ -29,6 +29,7 @@ const API = process.env.API_BASE_URL || 'http://localhost:8888'
 export default function Job51Page() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isDelivering, setIsDelivering] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
   const [checkingLogin, setCheckingLogin] = useState(true)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -286,7 +287,11 @@ export default function Job51Page() {
 
         const data = await response.json()
         if (!cancelled && data.success) {
+          const running = Boolean(data.isRunning)
           setIsDelivering(Boolean(data.isRunning))
+          if (typeof data.isLoggedIn === 'boolean') setIsLoggedIn(data.isLoggedIn)
+          if (!running) setIsStopping(false)
+          setCheckingLogin(false)
         }
       } catch {
         // 后端暂时不可用时保留当前按钮状态，下一轮轮询会继续同步。
@@ -304,6 +309,7 @@ export default function Job51Page() {
 
   const handleStartDelivery = async () => {
     try {
+      setIsStopping(false)
       setIsDelivering(true)
       const response = await fetch(`${API}/api/51job/start`, { method: 'POST' })
       const data = await response.json()
@@ -319,11 +325,11 @@ export default function Job51Page() {
 
   const handleStopDelivery = async () => {
     try {
+      setIsStopping(true)
       const response = await fetch(`${API}/api/51job/stop`, { method: 'POST' })
       if (!response.ok) {
-        // 后端返回错误状态码，恢复按钮
         console.warn('[51job] 停止投递请求失败，状态码:', response.status)
-        setIsDelivering(false)
+        setIsStopping(false)
         return
       }
       
@@ -332,17 +338,14 @@ export default function Job51Page() {
       
       // 根据后端返回结果切换按钮状态
       if (data.success) {
-        // 停止成功，恢复按钮
-        setIsDelivering(false)
+        // 保持运行态，等待后端真正退出后由状态轮询恢复开始按钮。
       } else {
-        // 停止失败（可能任务未运行），也恢复按钮
         console.warn('[51job] 停止投递失败:', data.message)
-        setIsDelivering(false)
+        setIsStopping(false)
       }
     } catch (error) {
-      // 网络异常或后端未启动，恢复按钮状态
       console.error('[51job] 停止投递请求异常:', error)
-      setIsDelivering(false)
+      setIsStopping(false)
     }
   }
 
@@ -424,17 +427,17 @@ export default function Job51Page() {
         accentBgClass="bg-blue-500"
         actions={
           <div className="flex items-center gap-2">
-            {checkingLogin ? (
+            {isDelivering ? (
+              <Button onClick={handleStopDelivery} disabled={isStopping} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+                <BiStop className="mr-1" /> {isStopping ? '正在停止...' : '正在投递，点击停止'}
+              </Button>
+            ) : checkingLogin ? (
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
                 <BiPlay className="mr-1" /> 检查登录中...
               </Button>
             ) : !isLoggedIn ? (
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
                 <BiPlay className="mr-1" /> 请先登录51job
-              </Button>
-            ) : isDelivering ? (
-              <Button onClick={handleStopDelivery} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
-                <BiStop className="mr-1" /> 停止投递
               </Button>
             ) : (
               <Button onClick={handleStartDelivery} size="sm" className="rounded-full bg-gradient-to-r from-teal-500 to-green-500 hover:from-teal-600 hover:to-green-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">

@@ -20,5 +20,7 @@ class ZhilianPageRepeatDeliveryTest {
                 "智联页面必须持续同步任务状态，不能只在页面加载时查询一次");
         assertTrue(pageSource.contains("setIsDelivering(Boolean(data.isRunning))"),
                 "智联页面必须用后端 isRunning 状态同步投递按钮");
+        assertTrue(pageSource.indexOf("{isDelivering ? (") < pageSource.indexOf(": checkingLogin ? ("),
+                "运行中的任务必须优先显示并允许停止");
     }
 }

@@ -11,8 +11,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class ExtensionErrorFilterTest {
+    @Test
+    void doesNotRenderTheMutableExtensionFilterAsHydratedHeadMarkup() throws IOException {
+        String layout = Files.readString(Path.of("front/app/layout.tsx"));
+
+        assertFalse(layout.contains("beforeInteractive"));
+        assertFalse(layout.contains("ignore-extension-errors.js"));
+    }
+
 
     @Test
     void blocksKnownExtensionErrorsBeforeTheyReachTheNextDevelopmentOverlay() throws IOException {

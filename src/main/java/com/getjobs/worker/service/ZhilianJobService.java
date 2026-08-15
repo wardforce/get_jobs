@@ -22,25 +22,15 @@ import java.util.function.Consumer;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class ZhilianJobService implements JobPlatformService {
+public class ZhilianJobService extends InterruptibleJobPlatformService {
     private static final String PLATFORM = "zhilian";
 
     private final PlaywrightManager playwrightManager;
     private final ObjectProvider<ZhiLian> zhilianProvider;
     private final ConfigService configService;
 
-    // 任务运行状态
-    private volatile boolean isRunning = false;
-    // 停止标志
-    private volatile boolean shouldStop = false;
-
     @Override
-    public void executeDelivery(Consumer<JobProgressMessage> progressCallback) {
-        if (isRunning) {
-            progressCallback.accept(JobProgressMessage.warning(PLATFORM, "任务已在运行中"));
-            return;
-        }
-
+    protected void doExecuteDelivery(Consumer<JobProgressMessage> progressCallback) {
         try {
             if (!playwrightManager.hasPage(PLATFORM)) {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "智联招聘页面未初始化"));
@@ -53,10 +43,6 @@ public class ZhilianJobService implements JobPlatformService {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "请先登录智联招聘"));
                 return;
             }
-
-            // 通过校验后再标记运行
-            isRunning = true;
-            shouldStop = false;
 
             // 暂停后台登录监控，避免与投递流程并发访问同一Page
             playwrightManager.pauseZhilianMonitoring();
@@ -76,7 +62,7 @@ public class ZhilianJobService implements JobPlatformService {
                 }
             };
 
-            int deliveredCount = playwrightManager.withPage(PLATFORM, page -> {
+            int deliveredCount = playwrightManager.withDeliveryPage(PLATFORM, page -> {
                 ZhiLian zhilian = zhilianProvider.getObject();
                 zhilian.setPage(page);
                 zhilian.setConfig(config);
@@ -86,8 +72,12 @@ public class ZhilianJobService implements JobPlatformService {
                 return zhilian.execute();
             });
 
-            progressCallback.accept(JobProgressMessage.success(PLATFORM,
-                String.format("投递任务完成，共投递%d个职位", deliveredCount)));
+            if (shouldStop()) {
+                progressCallback.accept(JobProgressMessage.warning(PLATFORM, "智联招聘投递任务已停止"));
+            } else {
+                progressCallback.accept(JobProgressMessage.success(PLATFORM,
+                    String.format("投递任务完成，共投递%d个职位", deliveredCount)));
+            }
         } catch (ZhilianAuthenticationExpiredException e) {
             playwrightManager.setLoginStatus(PLATFORM, false);
             progressCallback.accept(JobProgressMessage.error(
@@ -96,11 +86,13 @@ public class ZhilianJobService implements JobPlatformService {
                     "ZHILIAN_COOKIE_EXPIRED"
             ));
         } catch (Exception e) {
-            log.error("智联招聘投递任务执行失败", e);
-            progressCallback.accept(JobProgressMessage.error(PLATFORM, "投递失败: " + e.getMessage()));
+            if (shouldStop()) {
+                progressCallback.accept(JobProgressMessage.warning(PLATFORM, "智联招聘投递任务已停止"));
+            } else {
+                log.error("智联招聘投递任务执行失败", e);
+                progressCallback.accept(JobProgressMessage.error(PLATFORM, "投递失败: " + e.getMessage()));
+            }
         } finally {
-            isRunning = false;
-            shouldStop = false;
             // 恢复后台登录监控
             try {
                 playwrightManager.resumeZhilianMonitoring();
@@ -109,19 +101,13 @@ public class ZhilianJobService implements JobPlatformService {
     }
 
     @Override
-    public void stopDelivery() {
-        if (isRunning) {
-            log.info("收到停止智联招聘投递任务的请求");
-            shouldStop = true;
-        }
-    }
-
-    @Override
     public Map<String, Object> getStatus() {
         Map<String, Object> status = new HashMap<>();
         status.put("platform", PLATFORM);
-        status.put("isRunning", isRunning);
-        playwrightManager.refreshZhilianLoginStatus();
+        status.put("isRunning", isRunning());
+        if (!isRunning()) {
+            playwrightManager.refreshZhilianLoginStatus();
+        }
         status.put("isLoggedIn", playwrightManager.isLoggedIn(PLATFORM));
         status.putAll(playwrightManager.getZhilianSessionStatus());
         return status;
@@ -132,17 +118,4 @@ public class ZhilianJobService implements JobPlatformService {
         return PLATFORM;
     }
 
-    @Override
-    public boolean isRunning() {
-        return isRunning;
-    }
-
-    /**
-     * 检查是否应该停止
-     */
-    public boolean shouldStop() {
-        return shouldStop;
-    }
-
-    
 }

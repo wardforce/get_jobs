@@ -45,6 +45,7 @@ export default function LiepinPage() {
   const [isCustomCity, setIsCustomCity] = useState(false) // 是否手动输入城市
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isDelivering, setIsDelivering] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
   const [checkingLogin, setCheckingLogin] = useState(true)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showLogoutResultDialog, setShowLogoutResultDialog] = useState(false)
@@ -104,6 +105,37 @@ export default function LiepinPage() {
     }
     // 页面配置和 SSE 连接只在挂载时初始化。
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const syncDeliveryStatus = async () => {
+      try {
+        const response = await fetch('http://localhost:8888/api/liepin/status', {
+          method: 'GET',
+          cache: 'no-store',
+        })
+        if (!response.ok) return
+        const data = await response.json()
+        if (!cancelled && data.success) {
+          const running = Boolean(data.isRunning)
+          setIsDelivering(running)
+          if (typeof data.isLoggedIn === 'boolean') setIsLoggedIn(data.isLoggedIn)
+          if (!running) setIsStopping(false)
+          setCheckingLogin(false)
+        }
+      } catch {
+        // 下一轮继续同步。
+      }
+    }
+
+    void syncDeliveryStatus()
+    const timer = window.setInterval(syncDeliveryStatus, 1500)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
   }, [])
 
   // 将数据库中的 JSON 数组字符串转换为逗号分隔的可读字符串
@@ -197,6 +229,7 @@ export default function LiepinPage() {
 
   const handleStartDelivery = async () => {
     try {
+      setIsStopping(false)
       setIsDelivering(true)
       const response = await fetch('http://localhost:8888/api/liepin/start', {
         method: 'POST',
@@ -219,21 +252,22 @@ export default function LiepinPage() {
 
   const handleStopDelivery = async () => {
     try {
+      setIsStopping(true)
       const response = await fetch('http://localhost:8888/api/liepin/stop', {
         method: 'POST',
       })
       const data = await response.json()
 
       if (data.success) {
-        // 停止成功：不弹框
-        setIsDelivering(false)
+        // 等状态接口确认任务真正退出。
       } else {
         // 停止失败：不弹框
         console.warn('停止失败：', data.message)
+        setIsStopping(false)
       }
     } catch (error) {
       console.error('Failed to stop delivery:', error)
-      // 停止失败：不弹框
+      setIsStopping(false)
     }
   }
 
@@ -273,17 +307,17 @@ export default function LiepinPage() {
         accentBgClass="bg-purple-500"
         actions={
           <div className="flex items-center gap-2">
-            {checkingLogin ? (
+            {isDelivering ? (
+              <Button onClick={handleStopDelivery} disabled={isStopping} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+                <BiStop className="mr-1" /> {isStopping ? '正在停止...' : '正在投递，点击停止'}
+              </Button>
+            ) : checkingLogin ? (
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
                 <BiPlay className="mr-1" /> 检查登录中...
               </Button>
             ) : !isLoggedIn ? (
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
                 <BiPlay className="mr-1" /> 请先登录猎聘
-              </Button>
-            ) : isDelivering ? (
-              <Button onClick={handleStopDelivery} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
-                <BiStop className="mr-1" /> 停止投递
               </Button>
             ) : (
               <Button onClick={handleStartDelivery} size="sm" className="rounded-full bg-gradient-to-r from-teal-500 to-green-500 hover:from-teal-600 hover:to-green-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">

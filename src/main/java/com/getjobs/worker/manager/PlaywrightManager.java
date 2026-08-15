@@ -205,7 +205,9 @@ public class PlaywrightManager {
                         .setArgs(List.of(
                                 "--start-maximized",
                                 "--disable-blink-features=AutomationControlled",
-                                "--disable-extensions"
+                                "--disable-extensions",
+                                "--remote-debugging-address=127.0.0.1",
+                                "--remote-debugging-port=" + CHROME_DEBUG_PORT
                         ))
                         .setViewportSize(null)
                 );
@@ -2737,6 +2739,48 @@ public class PlaywrightManager {
             }
             return action.apply(page);
         });
+    }
+
+    /**
+     * Runs one complete delivery job through its own Playwright/CDP connection.
+     * Each platform task therefore owns its Playwright thread while sharing the visible Chrome window.
+     */
+    public <T> T withDeliveryPage(String platform, Function<Page, T> action) {
+        URI endpoint = URI.create("http://127.0.0.1:" + CHROME_DEBUG_PORT + "/json/version");
+        if (!isCdpEndpointReady(endpoint)) {
+            return withPage(platform, action);
+        }
+
+        try (Playwright deliveryPlaywright = Playwright.create()) {
+            Browser deliveryBrowser = deliveryPlaywright.chromium().connectOverCDP(
+                    "http://127.0.0.1:" + CHROME_DEBUG_PORT);
+            if (deliveryBrowser.contexts().isEmpty()) {
+                throw new IllegalStateException("投递浏览器上下文不可用: " + platform);
+            }
+            Page page = findPlatformPage(deliveryBrowser.contexts().get(0), platform);
+            if (page == null) {
+                throw new IllegalStateException("Playwright页面未初始化: " + platform);
+            }
+            page.setDefaultTimeout(DEFAULT_TIMEOUT);
+            return action.apply(page);
+        }
+    }
+
+    Page findPlatformPage(BrowserContext browserContext, String platform) {
+        String domain = switch (platform) {
+            case "boss" -> BOSS_DOMAIN;
+            case "liepin" -> LIEPIN_DOMAIN;
+            case "51job" -> JOB51_DOMAIN;
+            case "zhilian" -> ZHILIAN_DOMAIN;
+            case "lagou" -> LAGOU_DOMAIN;
+            default -> throw new IllegalArgumentException("Unsupported platform: " + platform);
+        };
+        return browserContext.pages().stream()
+                .filter(page -> !isPageClosed(page))
+                .filter(page -> pageMatchesDomain(page, domain))
+                .filter(this::isTopLevelPage)
+                .findFirst()
+                .orElse(null);
     }
 
     public Map<String, Object> getZhilianSessionStatus() {

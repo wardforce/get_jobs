@@ -25,7 +25,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
@@ -394,17 +393,16 @@ public class JobController {
                 response.put("status", "not_logged_in");
                 return ResponseEntity.badRequest().body(response);
             }
-            if (job51JobService.isRunning()) {
+            boolean started = job51JobService.startDelivery(pm -> {
+                sendJob51Progress(pm);
+                log.info("[{}] {}", pm.getPlatform(), pm.getMessage());
+            });
+            if (!started) {
                 response.put("success", false);
                 response.put("message", "51job任务已在运行中，请等待当前任务完成");
                 response.put("status", "running");
                 return ResponseEntity.badRequest().body(response);
             }
-            CompletableFuture.runAsync(() -> job51JobService.executeDelivery(pm -> {
-                // 推送到 SSE 并保留日志输出
-                sendJob51Progress(pm);
-                log.info("[{}] {}", pm.getPlatform(), pm.getMessage());
-            }));
             response.put("success", true);
             response.put("message", "51job任务启动成功");
             response.put("status", "started");

@@ -4,7 +4,6 @@ import "./globals.css";
 import Sidebar from "./components/Sidebar";
 import ContentArea from "./components/ContentArea";
 import { ThemeProvider } from "next-themes";
-import Script from "next/script";
 
 export default function RootLayout({
   children,
@@ -14,7 +13,6 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
-        <Script src="/ignore-extension-errors.js" strategy="beforeInteractive" />
         <title>Get Jobs - 配置管理中心</title>
         <meta name="description" content="配置管理中心，管理application.yaml和环境变量配置" />
         <link

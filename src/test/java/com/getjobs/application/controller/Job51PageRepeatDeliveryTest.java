@@ -17,5 +17,8 @@ class Job51PageRepeatDeliveryTest {
         assertTrue(pageSource.contains("/api/51job/status"));
         assertTrue(pageSource.contains("setInterval(syncDeliveryStatus"));
         assertTrue(pageSource.contains("setIsDelivering(Boolean(data.isRunning))"));
+        assertTrue(pageSource.indexOf("{isDelivering ? (") < pageSource.indexOf(": !isLoggedIn ? ("),
+                "运行中的任务必须优先于可能过期的登录状态显示");
+        assertTrue(pageSource.contains("正在投递，点击停止"));
     }
 }

@@ -14,7 +14,6 @@ import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -292,20 +291,14 @@ public class ZhilianController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // 检查是否已有任务在运行
-            if (zhilianJobService.isRunning()) {
+            boolean started = zhilianJobService.startDelivery(progressMessage ->
+                    log.info("[{}] {}", progressMessage.getPlatform(), progressMessage.getMessage()));
+            if (!started) {
                 response.put("success", false);
                 response.put("message", "智联招聘任务已在运行中，请等待当前任务完成");
                 response.put("status", "running");
                 return ResponseEntity.badRequest().body(response);
             }
-
-            // 异步启动新任务
-            CompletableFuture.runAsync(() -> {
-                zhilianJobService.executeDelivery(progressMessage -> {
-                    log.info("[{}] {}", progressMessage.getPlatform(), progressMessage.getMessage());
-                });
-            });
 
             response.put("success", true);
             response.put("message", "智联招聘任务启动成功");
