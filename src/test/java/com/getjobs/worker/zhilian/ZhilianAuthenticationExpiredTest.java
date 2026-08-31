@@ -20,11 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -94,6 +96,136 @@ class ZhilianAuthenticationExpiredTest {
         check.invoke(manager, page);
 
         assertFalse(manager.isLoggedIn("zhilian"));
+    }
+
+    @Test
+    void transientPageWithoutLoginMarkersDoesNotBecomeLoggedIn() throws Exception {
+        PlaywrightManager manager = new PlaywrightManager();
+        Page page = mock(Page.class);
+        Locator empty = mock(Locator.class);
+        when(page.locator(anyString())).thenReturn(empty);
+        when(empty.count()).thenReturn(0);
+        when(empty.first()).thenReturn(empty);
+        setField(manager, "zhilianPage", page);
+
+        Method check = PlaywrightManager.class.getDeclaredMethod("checkZhilianLoginStatus", Page.class);
+        check.setAccessible(true);
+        check.invoke(manager, page);
+
+        assertFalse(manager.isLoggedIn("zhilian"));
+        assertEquals("UNKNOWN", manager.getZhilianSessionStatus().get("loginState"));
+    }
+
+    @Test
+    void transientUnknownStateDoesNotClearConfirmedLogin() throws Exception {
+        PlaywrightManager manager = new PlaywrightManager();
+        Page page = mock(Page.class);
+        Locator empty = mock(Locator.class);
+        when(page.locator(anyString())).thenReturn(empty);
+        when(empty.count()).thenReturn(0);
+        when(empty.first()).thenReturn(empty);
+        setField(manager, "zhilianPage", page);
+        manager.setLoginStatus("zhilian", true);
+
+        Method check = PlaywrightManager.class.getDeclaredMethod("checkZhilianLoginStatus", Page.class);
+        check.setAccessible(true);
+        check.invoke(manager, page);
+
+        assertTrue(manager.isLoggedIn("zhilian"));
+        assertEquals("LOGGED_IN", manager.getZhilianSessionStatus().get("loginState"));
+    }
+
+    @Test
+    void explicitLoggedInUrlStillConfirmsLogin() throws Exception {
+        PlaywrightManager manager = new PlaywrightManager();
+        Page page = mock(Page.class);
+        Locator empty = mock(Locator.class);
+        when(page.url()).thenReturn("https://i.zhaopin.com/");
+        when(page.locator(anyString())).thenReturn(empty);
+        when(empty.count()).thenReturn(0);
+        when(empty.first()).thenReturn(empty);
+        setField(manager, "zhilianPage", page);
+
+        Method check = PlaywrightManager.class.getDeclaredMethod("checkZhilianLoginStatus", Page.class);
+        check.setAccessible(true);
+        check.invoke(manager, page);
+
+        assertTrue(manager.isLoggedIn("zhilian"));
+        assertEquals("LOGGED_IN", manager.getZhilianSessionStatus().get("loginState"));
+    }
+
+    @Test
+    void currentZhilianHomeLoginMarkerConfirmsLogin() throws Exception {
+        PlaywrightManager manager = new PlaywrightManager();
+        Page page = mock(Page.class);
+        Locator empty = mock(Locator.class);
+        Locator loggedInMarker = mock(Locator.class);
+        when(page.url()).thenReturn("https://www.zhaopin.com/");
+        when(page.locator(anyString())).thenAnswer(invocation ->
+                invocation.<String>getArgument(0).contains("c-login__top__name")
+                        ? loggedInMarker : empty);
+        when(empty.count()).thenReturn(0);
+        when(empty.first()).thenReturn(empty);
+        when(loggedInMarker.count()).thenReturn(1);
+        when(loggedInMarker.first()).thenReturn(loggedInMarker);
+        when(loggedInMarker.nth(0)).thenReturn(loggedInMarker);
+        when(loggedInMarker.isVisible()).thenReturn(true);
+        setField(manager, "zhilianPage", page);
+
+        Method check = PlaywrightManager.class.getDeclaredMethod("checkZhilianLoginStatus", Page.class);
+        check.setAccessible(true);
+        check.invoke(manager, page);
+
+        assertTrue(manager.isLoggedIn("zhilian"));
+        assertEquals("LOGGED_IN", manager.getZhilianSessionStatus().get("loginState"));
+    }
+
+    @Test
+    void visibleZhilianLoginMarkerAfterHiddenMatchConfirmsLogin() throws Exception {
+        PlaywrightManager manager = new PlaywrightManager();
+        Page page = mock(Page.class);
+        Locator empty = mock(Locator.class);
+        Locator markers = mock(Locator.class);
+        Locator hiddenMarker = mock(Locator.class);
+        Locator visibleMarker = mock(Locator.class);
+        when(page.url()).thenReturn("https://www.zhaopin.com/");
+        when(page.locator(anyString())).thenAnswer(invocation ->
+                invocation.<String>getArgument(0).contains("c-login__top__name")
+                        ? markers : empty);
+        when(empty.count()).thenReturn(0);
+        when(empty.first()).thenReturn(empty);
+        when(markers.count()).thenReturn(2);
+        when(markers.nth(0)).thenReturn(hiddenMarker);
+        when(markers.nth(1)).thenReturn(visibleMarker);
+        when(hiddenMarker.isVisible()).thenReturn(false);
+        when(visibleMarker.isVisible()).thenReturn(true);
+        setField(manager, "zhilianPage", page);
+
+        Method check = PlaywrightManager.class.getDeclaredMethod("checkZhilianLoginStatus", Page.class);
+        check.setAccessible(true);
+        check.invoke(manager, page);
+
+        assertTrue(manager.isLoggedIn("zhilian"));
+        assertEquals("LOGGED_IN", manager.getZhilianSessionStatus().get("loginState"));
+    }
+
+    @Test
+    void loginTriggerReturnsAfterOpeningLoginEntry() throws Exception {
+        PlaywrightManager manager = new PlaywrightManager();
+        Page page = mock(Page.class);
+        Locator empty = mock(Locator.class);
+        when(page.url()).thenReturn("https://www.zhaopin.com/");
+        when(page.locator(anyString())).thenReturn(empty);
+        when(empty.count()).thenReturn(0);
+        when(empty.first()).thenReturn(empty);
+        setField(manager, "zhilianPage", page);
+
+        Method trigger = PlaywrightManager.class.getDeclaredMethod("triggerZhilianLoginInternal");
+        trigger.setAccessible(true);
+        trigger.invoke(manager);
+
+        verify(page, never()).waitForURL(anyString(), any());
+        verify(page, never()).waitForSelector(anyString(), any());
     }
 
     private static void setField(Object target, String name, Object value) throws Exception {

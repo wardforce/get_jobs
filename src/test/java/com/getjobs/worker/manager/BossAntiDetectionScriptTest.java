@@ -146,4 +146,44 @@ class BossAntiDetectionScriptTest {
             }
         }
     }
+
+    @Test
+    void injectsLiepinScriptOnlyOnLiepinHosts() throws IOException {
+        String script;
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream("anti-detection.js")) {
+            assertNotNull(input);
+            script = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(
+                    new BrowserType.LaunchOptions().setHeadless(true)
+            );
+            try {
+                BrowserContext context = browser.newContext();
+                context.addInitScript(PlaywrightManager.wrapLiepinInitScript(script));
+                context.route("**/*", route -> route.fulfill(
+                        new com.microsoft.playwright.Route.FulfillOptions()
+                                .setContentType("text/html")
+                                .setBody("<html><body>offline</body></html>")
+                ));
+
+                for (String host : List.of(
+                        "www.liepin.com",
+                        "www.zhipin.com",
+                        "www.51job.com"
+                )) {
+                    Page page = context.newPage();
+                    page.navigate("https://" + host + "/");
+                    boolean injected = (Boolean) page.evaluate(
+                            "() => window.__liepinAntiDetectInjected === true"
+                    );
+                    assertEquals(host.endsWith(".liepin.com"), injected, host);
+                    page.close();
+                }
+            } finally {
+                browser.close();
+            }
+        }
+    }
 }

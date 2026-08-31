@@ -102,6 +102,7 @@ public class PlaywrightManager {
     private volatile boolean bossMonitoringPaused = false;
     // 控制是否暂停对liepinPage的后台监控
     private volatile boolean liepinMonitoringPaused = false;
+    private volatile long liepinNextRecoveryAtMs = 0L;
 
     // 控制是否暂停对51jobPage的后台监控
   private volatile boolean job51MonitoringPaused = false;
@@ -115,7 +116,9 @@ public class PlaywrightManager {
     private volatile boolean zhilianLoginGuided = false;
 
     // 默认超时时间（毫秒）
-  private static final int DEFAULT_TIMEOUT = 30000;
+    private static final int DEFAULT_TIMEOUT = 30000;
+    private static final int LIEPIN_NAVIGATION_ATTEMPTS = 2;
+    private static final long LIEPIN_RECOVERY_COOLDOWN_MS = 60_000L;
 
     // 平台URL常量
     private static final String BOSS_URL = "https://www.zhipin.com";
@@ -447,12 +450,19 @@ public class PlaywrightManager {
             return;
         }
         targetContext.addInitScript(wrapBossInitScript(script));
-        log.info("Boss 反检测脚本已注入到Context: {}", BOSS_INIT_SCRIPT_RESOURCE);
+        targetContext.addInitScript(wrapLiepinInitScript(script));
+        log.info("Boss/猎聘反检测脚本已注入到Context: {}", BOSS_INIT_SCRIPT_RESOURCE);
     }
 
     static String wrapBossInitScript(String script) {
         return "(function(){try{if(location&&/(^|\\.)zhipin\\.com$/.test(location.hostname)){"
                 + "if(window.__bossAntiDetectInjected){return;}window.__bossAntiDetectInjected=true;"
+                + script + "}}catch(e){}})();";
+    }
+
+    static String wrapLiepinInitScript(String script) {
+        return "(function(){try{if(location&&/(^|\\.)liepin\\.com$/.test(location.hostname)){"
+                + "if(window.__liepinAntiDetectInjected){return;}window.__liepinAntiDetectInjected=true;"
                 + script + "}}catch(e){}})();";
     }
 
@@ -631,55 +641,110 @@ public class PlaywrightManager {
             log.warn("从数据库加载猎聘Cookie失败: {}", e.getMessage());
         }
 
-        // 导航到猎聘首页（带重试机制）
-        int maxRetries = 3;
-        boolean navigateSuccess = false;
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                liepinPage.navigate(LIEPIN_URL, new Page.NavigateOptions()
-                        .setTimeout(60000)
-                        .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+        boolean navigateSuccess = navigateLiepinPage(liepinPage, "现有Page");
+        if (!navigateSuccess && context != null) {
+            Page oldPage = liepinPage;
+            Page replacement = context.newPage();
+            replacement.setDefaultTimeout(DEFAULT_TIMEOUT);
+            if (navigateLiepinPage(replacement, "替代Page")) {
+                liepinPage = replacement;
+                closePageQuietly(oldPage);
                 navigateSuccess = true;
-                break;
-            } catch (Exception e) {
-                // Playwright在并发导航时可能抛出 "Object doesn't exist" 异常，但页面实际已加载
-                boolean pageAccessible = false;
-                try {
-                    String url = liepinPage.url();
-                    pageAccessible = url != null && url.contains("liepin.com");
-                } catch (Exception ignored) {
-                }
-
-                if (pageAccessible) {
-                    navigateSuccess = true;
-                    break;
-                }
-
-                if (attempt < maxRetries) {
-                    try {
-                        Thread.sleep(2000);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
+                log.info("猎聘已切换到可用替代Page");
+            } else {
+                closePageQuietly(replacement);
             }
         }
 
         if (!navigateSuccess) {
-            log.warn("猎聘页面导航失败");
-        }
-
-        // 等待页面网络空闲，确保头部导航渲染完成
-        try {
-            liepinPage.waitForLoadState(LoadState.NETWORKIDLE);
-        } catch (Exception e) {
-            log.debug("等待猎聘页面网络空闲失败: {}", e.getMessage());
+            log.warn("猎聘页面导航失败，最终URL={}", safePageUrl(liepinPage));
         }
 
         // 初始化登录状态并通知（如果有SSE连接会立即推送）
-        setLoginStatus("liepin", checkIfLiepinLoggedIn());
+        setLoginStatus("liepin", navigateSuccess && checkIfLiepinLoggedIn());
         // 设置登录状态监控
         setupLiepinLoginMonitoring(liepinPage);
+    }
+
+    private boolean navigateLiepinPage(Page page, String pageLabel) {
+        if (page == null) {
+            return false;
+        }
+        for (int attempt = 1; attempt <= LIEPIN_NAVIGATION_ATTEMPTS; attempt++) {
+            try {
+                page.navigate(LIEPIN_URL, new Page.NavigateOptions()
+                        .setTimeout(60000)
+                        .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+                try {
+                    page.waitForLoadState(LoadState.NETWORKIDLE,
+                            new Page.WaitForLoadStateOptions().setTimeout(10000));
+                } catch (Exception networkIdleTimeout) {
+                    log.debug("猎聘{}等待网络空闲超时，继续检查页面内容: {}",
+                            pageLabel, networkIdleTimeout.getMessage());
+                }
+                if (isLiepinPageReady(page)) {
+                    log.info("猎聘{}导航成功，最终URL={}", pageLabel, safePageUrl(page));
+                    return true;
+                }
+                log.warn("猎聘{}导航后页面未渲染，第{}次，最终URL={}",
+                        pageLabel, attempt, safePageUrl(page));
+            } catch (Exception e) {
+                log.warn("猎聘{}导航失败，第{}次，URL={}，原因={}",
+                        pageLabel, attempt, safePageUrl(page), e.getMessage());
+            }
+            if (attempt < LIEPIN_NAVIGATION_ATTEMPTS) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
+    boolean isLiepinPageReady(Page page) {
+        try {
+            if (page == null || page.isClosed() || !pageMatchesDomain(page, LIEPIN_DOMAIN)) {
+                return false;
+            }
+            Locator body = page.locator("body");
+            if (body.count() == 0) {
+                return false;
+            }
+            String text = body.innerText();
+            return text != null && !text.isBlank();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void recoverLiepinPageIfNeeded() {
+        if (context == null || isLiepinPageReady(liepinPage)) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now < liepinNextRecoveryAtMs) {
+            return;
+        }
+        liepinNextRecoveryAtMs = now + LIEPIN_RECOVERY_COOLDOWN_MS;
+        log.warn("检测到猎聘Page无效，开始自动恢复，当前URL={}", safePageUrl(liepinPage));
+
+        Page oldPage = liepinPage;
+        Page replacement = context.newPage();
+        replacement.setDefaultTimeout(DEFAULT_TIMEOUT);
+        if (navigateLiepinPage(replacement, "自动恢复")) {
+            liepinPage = replacement;
+            closePageQuietly(oldPage);
+            setLoginStatus("liepin", checkIfLiepinLoggedIn());
+            setupLiepinLoginMonitoring(replacement);
+            log.info("猎聘Page自动恢复完成");
+        } else {
+            closePageQuietly(replacement);
+            setLoginStatus("liepin", false);
+            log.warn("猎聘Page自动恢复失败，保留原Page等待下一次重试");
+        }
     }
 
     /**
@@ -689,6 +754,10 @@ public class PlaywrightManager {
      */
     private boolean checkIfLiepinLoggedIn() {
         try {
+            if (!isLiepinPageReady(liepinPage)) {
+                log.info("猎聘页面尚未渲染完成，暂不判定为已登录");
+                return false;
+            }
             // 先检查“登录/注册”入口是否可见，若可见则明确未登录
             try {
                 Locator loginEntry = liepinPage.locator(
@@ -1222,8 +1291,12 @@ public class PlaywrightManager {
 
         // 初始化登录状态并通知（如果有SSE连接会立即推送）
         ZhilianLoginState initialState = detectZhilianLoginState(zhilianPage);
-        zhilianLoginState = initialState.name();
-        setLoginStatus("zhilian", initialState == ZhilianLoginState.LOGGED_IN);
+        if (initialState == ZhilianLoginState.UNKNOWN) {
+            zhilianLoginState = ZhilianLoginState.UNKNOWN.name();
+            loginStatus.putIfAbsent("zhilian", false);
+        } else {
+            setLoginStatus("zhilian", initialState == ZhilianLoginState.LOGGED_IN);
+        }
         // 设置登录状态监控
         setupZhilianLoginMonitoring(zhilianPage);
     }
@@ -1309,6 +1382,22 @@ public class PlaywrightManager {
         }
     }
 
+    private boolean hasVisibleZhilianElement(Page page, String selector) {
+        try {
+            Locator elements = page.locator(selector);
+            int count = Math.min(elements.count(), 50);
+            for (int index = 0; index < count; index++) {
+                Locator element = count == 1 ? elements.first() : elements.nth(index);
+                if (element.isVisible()) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("检查智联选择器失败: selector={}, reason={}", selector, e.getMessage());
+        }
+        return false;
+    }
+
     private void markZhilianPageConnected(Page page) {
         zhilianPageState = "CONNECTED";
         zhilianPageUrl = safePageUrl(page);
@@ -1329,16 +1418,14 @@ public class PlaywrightManager {
             return ZhilianLoginState.UNKNOWN;
         }
         try {
-            Locator loginModal = page.locator(
+            if (hasVisibleZhilianElement(page,
                     "div.a-job-apply-workflow-close div.zppp-panel-login-normal, " +
-                    "div.a-job-apply-workflow-close div.zppp-panel-login-qrcode"
-            );
-            if (loginModal.count() > 0 && loginModal.first().isVisible()) {
+                    "div.a-job-apply-workflow-close div.zppp-panel-login-qrcode")) {
                 return ZhilianLoginState.LOGGED_OUT;
             }
 
-            Locator loginButton = page.locator("a.home-header__c-no-login").first();
-            if (loginButton.count() > 0 && loginButton.isVisible()) {
+            if (hasVisibleZhilianElement(page,
+                    "a.home-header__c-no-login, a.home-search__c-no-login")) {
                 return ZhilianLoginState.LOGGED_OUT;
             }
 
@@ -1347,15 +1434,15 @@ public class PlaywrightManager {
                 return ZhilianLoginState.LOGGED_IN;
             }
 
-            Locator userIdentity = page.locator(
-                    ".user-info, .user-name, .username-text, a[href*='user'], a[href*='resume']"
-            ).first();
-            if (userIdentity.count() > 0 && userIdentity.isVisible()) {
+            if (hasVisibleZhilianElement(page,
+                    ".home-header__c-login, .c-login__top__name, .c-login__top__photo, " +
+                    ".home-login .login-after, .user-info, .user-name, .username-text, " +
+                    "a[href*='user'], a[href*='resume']")) {
                 return ZhilianLoginState.LOGGED_IN;
             }
 
-            // 首页没有登录入口时沿用原有兼容行为，避免把已登录会话误报为未登录。
-            return ZhilianLoginState.LOGGED_IN;
+            // 页面导航或前端渲染尚未完成时，缺少标记不能作为已登录证据。
+            return ZhilianLoginState.UNKNOWN;
         } catch (Exception e) {
             markZhilianPageState("RECOVERING", "智联登录状态暂时无法确认");
             log.debug("智联招聘：检查登录状态异常: {}", e.getMessage());
@@ -1546,10 +1633,10 @@ public class PlaywrightManager {
             zhilianPage = page;
             markZhilianPageConnected(page);
             ZhilianLoginState detectedState = detectZhilianLoginState(page);
-            zhilianLoginState = detectedState.name();
             if (detectedState == ZhilianLoginState.UNKNOWN) {
                 return;
             }
+            zhilianLoginState = detectedState.name();
 
             Boolean previousStatus = loginStatus.get("zhilian");
             if (detectedState == ZhilianLoginState.LOGGED_IN
@@ -1566,7 +1653,7 @@ public class PlaywrightManager {
     }
 
     /**
-     * 主动触发智联招聘登录：点击二维码入口并等待登录成功跳转
+     * 主动触发智联招聘登录：打开登录入口，登录状态由后台监控异步确认。
      */
     public void triggerZhilianLogin() {
         gate.run(this::triggerZhilianLoginInternal);
@@ -1599,19 +1686,7 @@ public class PlaywrightManager {
                 log.info("未检测到未登录入口，可能已登录或在其他页面");
             }
 
-            // 监听登录成功：等待URL跳转到 i.zhaopin.com 或用户信息元素出现
-            try {
-                zhilianPage.waitForURL("**i.zhaopin.com**", new Page.WaitForURLOptions().setTimeout(120_000));
-                onZhilianLoginSuccess();
-                return;
-            } catch (Exception ignored) {
-            }
-            try {
-                zhilianPage.waitForSelector(".user-info, .user-name, .username-text", new Page.WaitForSelectorOptions().setTimeout(120_000));
-                onZhilianLoginSuccess();
-            } catch (Exception e) {
-                log.warn("等待智联登录成功超时或失败: {}", e.getMessage());
-            }
+            // 登录成功由页面导航监听和状态轮询统一检测，避免接口阻塞数分钟。
         } catch (Exception e) {
             log.error("触发智联登录流程失败: {}", e.getMessage(), e);
             throw new RuntimeException("触发智联登录流程失败", e);
@@ -2604,6 +2679,7 @@ public class PlaywrightManager {
     private void scheduledLoginCheckInternal() {
         try {
             if (liepinPage != null && !liepinMonitoringPaused) {
+                recoverLiepinPageIfNeeded();
                 checkLiepinLoginStatus(liepinPage);
             }
             // 其他平台如需也可启用（保留，但不强制）
