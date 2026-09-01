@@ -11,6 +11,7 @@ import com.getjobs.worker.manager.PlaywrightManager;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.nio.file.Path;
 
 /**
  * 应用启动后自动打开管理页面
@@ -32,6 +33,9 @@ public class StartupRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
+        log.info("运行目录={}, SQLite数据库={}",
+                Path.of("").toAbsolutePath().normalize(),
+                Path.of("db", "getjobs.db").toAbsolutePath().normalize());
         String urlToOpen = determineUrlToOpen();
         if (urlToOpen != null) {
             openBrowser(urlToOpen);

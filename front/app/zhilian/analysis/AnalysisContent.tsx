@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import PageHeader from "@/app/components/PageHeader"
 import { BiRefresh, BiDownload, BiBarChart, BiLineChart, BiBriefcase } from "react-icons/bi"
 import { parseSalary } from "@/lib/salary"
+import { apiFetch } from "@/lib/api"
 
 type NameValue = { name: string; value: number }
 type BucketValue = { bucket: string; value: number }
@@ -53,7 +54,6 @@ type PagedResult = {
   size: number
 }
 
-const API_BASE = process.env.API_BASE_URL || "http://localhost:8888"
 
 const CATEGORY_COLORS = [
   "#3b82f6",
@@ -131,14 +131,14 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       if (keyword) params.set("keyword", keyword)
       params.set("page", String(toPage))
       params.set("size", String(toSize))
-      const res = await fetch(`${API_BASE}/api/zhilian/list?${params.toString()}`)
+      const res = await apiFetch(`/api/zhilian/list?${params.toString()}`)
       const data: PagedResult = await res.json()
       setItems(data.items || [])
       setTotal(data.total || 0)
       setPage(data.page || toPage)
       setSize(data.size || toSize)
     } catch (e) {
-      console.error("fetch zhilian list failed", e)
+      console.warn("fetch zhilian list failed", e)
     }
   }
 
@@ -153,11 +153,11 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       if (minK) params.set("minK", String(Number(minK)))
       if (maxK) params.set("maxK", String(Number(maxK)))
       if (keyword) params.set("keyword", keyword)
-      const res = await fetch(`${API_BASE}/api/zhilian/stats?${params.toString()}`)
+      const res = await apiFetch(`/api/zhilian/stats?${params.toString()}`)
       const data: StatsResponse = await res.json()
       setStats(data)
     } catch (e) {
-      console.error("fetch zhilian stats failed", e)
+      console.warn("fetch zhilian stats failed", e)
     } finally {
       setLoadingStats(false)
     }
@@ -194,7 +194,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         const params = new URLSearchParams(baseParams)
         params.set("page", String(currentPage))
         params.set("size", String(pageSize))
-        const res = await fetch(`${API_BASE}/api/zhilian/list?${params.toString()}`)
+        const res = await apiFetch(`/api/zhilian/list?${params.toString()}`)
         const data: PagedResult = await res.json()
         const chunk = data.items || []
         if (currentPage === 1) totalCount = data.total || chunk.length
@@ -237,7 +237,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (e) {
-      console.error("export csv failed", e)
+      console.warn("export csv failed", e)
     } finally {
       setExporting(false)
     }
@@ -263,7 +263,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         const params = new URLSearchParams(baseParams)
         params.set("page", String(currentPage))
         params.set("size", String(pageSize))
-        const res = await fetch(`${API_BASE}/api/zhilian/list?${params.toString()}`)
+        const res = await apiFetch(`/api/zhilian/list?${params.toString()}`)
         const data: PagedResult = await res.json()
         const chunk = data.items || []
         if (currentPage === 1) totalCount = data.total || chunk.length
@@ -287,7 +287,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       const counts = buckets.map((b) => ks.filter((k) => (b.max == null ? k >= b.min : k >= b.min && k < b.max)).length)
       setComputedSalaryBuckets(buckets.map((b, i) => ({ bucket: b.key, value: counts[i] })))
     } catch (e) {
-      console.error("compute salary buckets failed", e)
+      console.warn("compute salary buckets failed", e)
       setComputedSalaryBuckets([])
     }
   }

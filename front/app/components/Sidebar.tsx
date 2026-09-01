@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import { BiEnvelope, BiBriefcase, BiSearch, BiTask, BiUserCircle, BiBrain, BiMoon, BiSun } from 'react-icons/bi'
 import { motion } from 'framer-motion'
 import { useTheme } from 'next-themes'
+import { apiFetch } from '@/lib/api'
 
 export default function Sidebar() {
   const pathname = usePathname()
@@ -26,16 +27,14 @@ export default function Sidebar() {
     const check = async () => {
       if (checkingRef.current) return
       checkingRef.current = true
-      const baseUrl = process.env.API_BASE_URL || 'http://localhost:8888'
-
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 3000)
       try {
         // 先尝试自定义健康接口
-        let res = await fetch(`${baseUrl}/api/health`, { signal: controller.signal })
+        let res = await apiFetch('/api/health', { signal: controller.signal })
         if (res.status === 404) {
           // 回退到 Spring Boot Actuator
-          res = await fetch(`${baseUrl}/actuator/health`, { signal: controller.signal })
+          res = await apiFetch('/actuator/health', { signal: controller.signal })
         }
         if (!res.ok) throw new Error(`status ${res.status}`)
         const data = await res.json()

@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef } from "react"
+import Chart from "chart.js/auto"
 
 type ChartType = "pie" | "bar" | "line"
 
@@ -12,41 +13,6 @@ type ChartDataset = {
   fill?: boolean
   pointBackgroundColor?: string
   pointBorderColor?: string
-}
-
-type ChartConfiguration = {
-  type: ChartType
-  data: {
-    labels: string[]
-    datasets: ChartDataset[]
-  }
-  options: {
-    responsive: boolean
-    maintainAspectRatio: boolean
-    plugins: {
-      legend: { display: boolean }
-      title: { display: boolean; text?: string }
-    }
-    scales?: {
-      x: { ticks: { autoSkip: boolean } }
-      y: { beginAtZero: boolean }
-    }
-  }
-}
-
-type ChartInstance = {
-  destroy: () => void
-}
-
-type ChartConstructor = new (
-  context: CanvasRenderingContext2D,
-  configuration: ChartConfiguration,
-) => ChartInstance
-
-declare global {
-  interface Window {
-    Chart?: ChartConstructor
-  }
 }
 
 export type ChartCanvasProps = {
@@ -72,50 +38,6 @@ const PIE_COLORS = [
   "#06b6d4",
 ]
 
-const getChartConstructor = () => {
-  if (!window.Chart) {
-    throw new Error("Chart.js loaded without exposing window.Chart")
-  }
-  return window.Chart
-}
-
-const ensureChart = async (): Promise<ChartConstructor> => {
-  if (window.Chart) {
-    return window.Chart
-  }
-
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(
-      "script[data-chartjs-cdn='true']",
-    )
-    if (existing) {
-      existing.addEventListener("load", () => resolve(getChartConstructor()), {
-        once: true,
-      })
-      existing.addEventListener(
-        "error",
-        () => reject(new Error("Chart.js CDN load error")),
-        { once: true },
-      )
-      return
-    }
-
-    const script = document.createElement("script")
-    script.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
-    script.async = true
-    script.dataset.chartjsCdn = "true"
-    script.addEventListener("load", () => resolve(getChartConstructor()), {
-      once: true,
-    })
-    script.addEventListener(
-      "error",
-      () => reject(new Error("Chart.js CDN load error")),
-      { once: true },
-    )
-    document.head.appendChild(script)
-  })
-}
-
 export default function ChartCanvas({
   type,
   labels,
@@ -125,7 +47,7 @@ export default function ChartCanvas({
   colors,
 }: ChartCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const chartRef = useRef<ChartInstance | null>(null)
+  const chartRef = useRef<Chart | null>(null)
 
   useEffect(() => {
     const context = canvasRef.current?.getContext("2d")
@@ -135,7 +57,6 @@ export default function ChartCanvas({
 
     chartRef.current?.destroy()
     chartRef.current = null
-    let cancelled = false
 
     const backgroundColor =
       type === "pie"
@@ -163,12 +84,8 @@ export default function ChartCanvas({
         : {}),
     }
 
-    void ensureChart()
-      .then((Chart) => {
-        if (cancelled) {
-          return
-        }
-        chartRef.current = new Chart(context, {
+    try {
+      chartRef.current = new Chart(context, {
           type,
           data: { labels, datasets: [dataset] },
           options: {
@@ -186,14 +103,12 @@ export default function ChartCanvas({
                     y: { beginAtZero: true },
                   },
           },
-        })
       })
-      .catch((error: unknown) => {
-        console.error("Failed to create chart:", error)
-      })
+    } catch (error: unknown) {
+      console.error("Failed to create chart:", error)
+    }
 
     return () => {
-      cancelled = true
       chartRef.current?.destroy()
       chartRef.current = null
     }

@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
 import PageHeader from "@/app/components/PageHeader"
 import { BiRefresh, BiDownload, BiBarChart, BiLineChart, BiPieChart, BiBriefcase } from "react-icons/bi"
+import { apiFetch } from "@/lib/api"
 
 type NameValue = { name: string; value: number }
 type BucketValue = { bucket: string; value: number }
@@ -65,7 +66,6 @@ type PagedResult = {
   size: number
 }
 
-const API_BASE = "http://localhost:8888"
 // 通用分类颜色（用于柱状/饼状图每个分类不同颜色）
 const CATEGORY_COLORS = [
   "#3b82f6",
@@ -197,7 +197,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
 
     try {
       setLoadingList(true)
-      const res = await fetch(`${API_BASE}/api/boss/list?${params.toString()}`)
+      const res = await apiFetch(`/api/boss/list?${params.toString()}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: PagedResult = await res.json()
       setBackendUnavailable(false)
@@ -232,7 +232,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
     if (filterHeadhunter) params.set("filterHeadhunter", "true")
 
     try {
-      const res = await fetch(`${API_BASE}/api/boss/stats?${params.toString()}`)
+      const res = await apiFetch(`/api/boss/stats?${params.toString()}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: StatsResponse = await res.json()
       setStats(data)
@@ -251,7 +251,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
   const onReload = async () => {
     try {
       setReloading(true)
-      const res = await fetch(`${API_BASE}/api/boss/reload`)
+      const res = await apiFetch('/api/boss/reload')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       console.log("reload", data)
@@ -289,7 +289,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         const params = new URLSearchParams(baseParams)
         params.set("page", String(currentPage))
         params.set("size", String(pageSize))
-        const res = await fetch(`${API_BASE}/api/boss/list?${params.toString()}`)
+      const res = await apiFetch(`/api/boss/list?${params.toString()}`)
         const data: PagedResult = await res.json()
         let chunk = data.items || []
         // 导出也做兜底过滤，确保CSV不含猎头岗位
@@ -340,7 +340,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
-      console.error("export CSV failed", e)
+      console.warn("export CSV failed", e)
       alert("导出失败，请稍后重试")
     } finally {
       setExporting(false)

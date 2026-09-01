@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label"
 import PageHeader from "@/app/components/PageHeader"
 import { BiRefresh, BiDownload, BiBarChart, BiLineChart, BiPieChart, BiBriefcase } from "react-icons/bi"
 import { parseSalary } from "@/lib/salary"
+import { apiFetch } from "@/lib/api"
 
 type NameValue = { name: string; value: number }
 type BucketValue = { bucket: string; value: number }
@@ -61,7 +62,6 @@ type PagedResult = {
   size: number
 }
 
-const API_BASE = "http://localhost:8888"
 const CATEGORY_COLORS = [
   "#3b82f6",
   "#10b981",
@@ -138,14 +138,14 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
 
     try {
       setLoadingList(true)
-      const res = await fetch(`${API_BASE}/api/liepin/list?${params.toString()}`)
+      const res = await apiFetch(`/api/liepin/list?${params.toString()}`)
       const data: PagedResult = await res.json()
       setItems(data.items || [])
       setTotal(data.total || 0)
       setPage(data.page || toPage)
       setSize(data.size || toSize)
     } catch (e) {
-      console.error("fetch liepin list failed", e)
+      console.warn("fetch liepin list failed", e)
     } finally {
       setLoadingList(false)
     }
@@ -162,11 +162,11 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
     if (keyword) params.set("keyword", keyword)
 
     try {
-      const res = await fetch(`${API_BASE}/api/liepin/stats?${params.toString()}`)
+      const res = await apiFetch(`/api/liepin/stats?${params.toString()}`)
       const data: StatsResponse = await res.json()
       setStats(data)
     } catch (e) {
-      console.error("fetch liepin stats failed", e)
+      console.warn("fetch liepin stats failed", e)
     }
   }
 
@@ -195,7 +195,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         const params = new URLSearchParams(baseParams)
         params.set("page", String(currentPage))
         params.set("size", String(pageSize))
-        const res = await fetch(`${API_BASE}/api/liepin/list?${params.toString()}`)
+        const res = await apiFetch(`/api/liepin/list?${params.toString()}`)
         const data: PagedResult = await res.json()
         const chunk = data.items || []
         if (currentPage === 1) totalCount = data.total || chunk.length
@@ -239,7 +239,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
-      console.error("export CSV failed", e)
+      console.warn("export CSV failed", e)
       alert("导出失败，请稍后重试")
     } finally {
       setExporting(false)
@@ -267,7 +267,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         const params = new URLSearchParams(baseParams)
         params.set("page", String(currentPage))
         params.set("size", String(pageSize))
-        const res = await fetch(`${API_BASE}/api/liepin/list?${params.toString()}`)
+        const res = await apiFetch(`/api/liepin/list?${params.toString()}`)
         const data: PagedResult = await res.json()
         const chunk = data.items || []
         if (currentPage === 1) totalCount = data.total || chunk.length
@@ -295,7 +295,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       }
       setComputedSalaryBuckets(buckets.map((b) => ({ bucket: b.key, value: counts.get(b.key) || 0 })))
     } catch (e) {
-      console.error("compute salary buckets failed", e)
+      console.warn("compute salary buckets failed", e)
       setComputedSalaryBuckets([])
     }
   }

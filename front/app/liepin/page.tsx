@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import AnalysisContent from '@/app/liepin/analysis/AnalysisContent'
 import PageHeader from '@/app/components/PageHeader'
+import { API_BASE_URL, apiFetch } from '@/lib/api'
 
 interface LiepinConfig {
   id?: number
@@ -31,6 +32,7 @@ interface LiepinOptions {
 }
 
 export default function LiepinPage() {
+  const API = API_BASE_URL
   const [config, setConfig] = useState<LiepinConfig>({
     keywords: '',
     city: '',
@@ -47,6 +49,8 @@ export default function LiepinPage() {
   const [isDelivering, setIsDelivering] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
   const [checkingLogin, setCheckingLogin] = useState(true)
+  const [pageState, setPageState] = useState('MISSING')
+  const [stateMessage, setStateMessage] = useState('猎聘页面尚未连接')
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showLogoutResultDialog, setShowLogoutResultDialog] = useState(false)
   const [logoutResult, setLogoutResult] = useState<{ success: boolean; message: string } | null>(null)
@@ -61,7 +65,7 @@ export default function LiepinPage() {
       return
     }
 
-    const client = createSSEWithBackoff('http://localhost:8888/api/jobs/login-status/stream', {
+    const client = createSSEWithBackoff(`${API}/api/jobs/login-status/stream`, {
       onOpen: () => {
         console.log('[SSE] 连接已打开')
       },
@@ -76,9 +80,11 @@ export default function LiepinPage() {
             try {
               const data = JSON.parse(event.data)
               setIsLoggedIn(data.liepinLoggedIn || false)
+              if (data.liepinPageState) setPageState(data.liepinPageState)
+              if (data.liepinStateMessage) setStateMessage(data.liepinStateMessage)
               setCheckingLogin(false)
             } catch (error) {
-              console.error('[SSE] 解析连接消息失败:', error)
+              console.warn('[SSE] 解析连接消息失败:', error)
             }
           },
         },
@@ -89,10 +95,13 @@ export default function LiepinPage() {
               const data = JSON.parse(event.data)
               if (data.platform === 'liepin') {
                 setIsLoggedIn(data.isLoggedIn)
+                if (data.loginState) setIsLoggedIn(data.loginState === 'LOGGED_IN')
+                if (data.pageState) setPageState(data.pageState)
+                if (data.message) setStateMessage(data.message)
                 setCheckingLogin(false)
               }
             } catch (error) {
-              console.error('[SSE] 解析登录状态消息失败:', error)
+              console.warn('[SSE] 解析登录状态消息失败:', error)
             }
           },
         },
@@ -112,7 +121,7 @@ export default function LiepinPage() {
 
     const syncDeliveryStatus = async () => {
       try {
-        const response = await fetch('http://localhost:8888/api/liepin/status', {
+        const response = await apiFetch('/api/liepin/status', {
           method: 'GET',
           cache: 'no-store',
         })
@@ -122,6 +131,9 @@ export default function LiepinPage() {
           const running = Boolean(data.isRunning)
           setIsDelivering(running)
           if (typeof data.isLoggedIn === 'boolean') setIsLoggedIn(data.isLoggedIn)
+          if (data.loginState) setIsLoggedIn(data.loginState === 'LOGGED_IN')
+          if (data.pageState) setPageState(data.pageState)
+          if (data.message) setStateMessage(data.message)
           if (!running) setIsStopping(false)
           setCheckingLogin(false)
         }
@@ -168,7 +180,7 @@ export default function LiepinPage() {
 
   const fetchAllData = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/liepin/config')
+      const response = await apiFetch('/api/liepin/config')
       const data = await response.json()
 
       console.log('Fetched liepin data:', data)
@@ -187,7 +199,7 @@ export default function LiepinPage() {
         setOptions(data.options)
       }
     } catch (error) {
-      console.error('Failed to fetch liepin data:', error)
+      console.warn('Failed to fetch liepin data:', error)
     } finally {
       setLoading(false)
     }
@@ -196,7 +208,7 @@ export default function LiepinPage() {
   const handleSave = async () => {
     try {
       const payload = { ...config, keywords: serializeKeywordsForDb(config.keywords) }
-      const response = await fetch('http://localhost:8888/api/liepin/config', {
+      const response = await apiFetch('/api/liepin/config', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -207,7 +219,7 @@ export default function LiepinPage() {
       if (response.ok) {
         // 统一保存 Cookie（Liepin）
         try {
-          await fetch('http://localhost:8888/api/cookie/save?platform=liepin', { method: 'POST' })
+          await apiFetch('/api/cookie/save?platform=liepin', { method: 'POST' })
         } catch (e) {
           console.warn('保存 Cookie 失败（Liepin）:', e)
         }
@@ -221,7 +233,7 @@ export default function LiepinPage() {
         setShowSaveDialog(true)
       }
     } catch (error) {
-      console.error('Failed to save config:', error)
+      console.warn('Failed to save config:', error)
       setSaveResult({ success: false, message: '保存失败：网络或服务异常。' })
       setShowSaveDialog(true)
     }
@@ -231,7 +243,7 @@ export default function LiepinPage() {
     try {
       setIsStopping(false)
       setIsDelivering(true)
-      const response = await fetch('http://localhost:8888/api/liepin/start', {
+      const response = await apiFetch('/api/liepin/start', {
         method: 'POST',
       })
       const data = await response.json()
@@ -244,7 +256,7 @@ export default function LiepinPage() {
         setIsDelivering(false)
       }
     } catch (error) {
-      console.error('Failed to start delivery:', error)
+      console.warn('Failed to start delivery:', error)
       // 启动失败：不弹框
       setIsDelivering(false)
     }
@@ -253,7 +265,7 @@ export default function LiepinPage() {
   const handleStopDelivery = async () => {
     try {
       setIsStopping(true)
-      const response = await fetch('http://localhost:8888/api/liepin/stop', {
+      const response = await apiFetch('/api/liepin/stop', {
         method: 'POST',
       })
       const data = await response.json()
@@ -266,14 +278,14 @@ export default function LiepinPage() {
         setIsStopping(false)
       }
     } catch (error) {
-      console.error('Failed to stop delivery:', error)
+      console.warn('Failed to stop delivery:', error)
       setIsStopping(false)
     }
   }
 
   const triggerLogout = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/liepin/logout', { method: 'POST' })
+      const response = await apiFetch('/api/liepin/logout', { method: 'POST' })
       const data = await response.json()
       if (data.success) {
         setIsLoggedIn(false)
@@ -287,7 +299,7 @@ export default function LiepinPage() {
         setShowLogoutResultDialog(true)
       }
     } catch (error) {
-      console.error('Failed to logout:', error)
+      console.warn('Failed to logout:', error)
       setLogoutResult({ success: false, message: '退出登录失败：网络或服务异常。' })
       setShowLogoutResultDialog(true)
     }
@@ -311,9 +323,13 @@ export default function LiepinPage() {
               <Button onClick={handleStopDelivery} disabled={isStopping} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
                 <BiStop className="mr-1" /> {isStopping ? '正在停止...' : '正在投递，点击停止'}
               </Button>
-            ) : checkingLogin ? (
+            ) : checkingLogin || pageState === 'RECOVERING' ? (
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
-                <BiPlay className="mr-1" /> 检查登录中...
+                <BiPlay className="mr-1" /> 检查猎聘页面中...
+              </Button>
+            ) : pageState !== 'CONNECTED' ? (
+              <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow" title={stateMessage}>
+                <BiPlay className="mr-1" /> 猎聘页面连接异常
               </Button>
             ) : !isLoggedIn ? (
               <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
@@ -352,6 +368,9 @@ export default function LiepinPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
+              {pageState !== 'CONNECTED' && !checkingLogin && (
+                <p className="rounded-lg border border-amber-300/50 bg-amber-50/60 px-3 py-2 text-sm text-amber-800">{stateMessage}</p>
+              )}
               <p className="text-sm text-muted-foreground">请在浏览器标签页中登录 猎聘 平台，登录成功后系统会自动检测登录状态。</p>
               <p className="text-sm text-muted-foreground">登录成功后，点击“开始投递”按钮启动自动投递任务。</p>
               <p className="text-sm text-muted-foreground">点击“保存配置”按钮可手动保存当前登录相关信息到数据库。</p>

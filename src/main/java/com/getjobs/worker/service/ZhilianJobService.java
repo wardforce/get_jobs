@@ -88,6 +88,12 @@ public class ZhilianJobService extends InterruptibleJobPlatformService {
         } catch (Exception e) {
             if (shouldStop()) {
                 progressCallback.accept(JobProgressMessage.warning(PLATFORM, "智联招聘投递任务已停止"));
+            } else if (e instanceof com.getjobs.worker.zhilian.ZhiLian.ZhilianPageLostException) {
+                playwrightManager.markZhilianPageLost(e.getMessage());
+                progressCallback.accept(JobProgressMessage.error(
+                        PLATFORM,
+                        "智联页面连接已断开，任务已停止，请重新连接后再试"
+                ));
             } else {
                 log.error("智联招聘投递任务执行失败", e);
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "投递失败: " + e.getMessage()));

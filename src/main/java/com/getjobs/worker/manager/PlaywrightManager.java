@@ -86,6 +86,14 @@ public class PlaywrightManager {
     // 登录状态追踪（平台 -> 是否已登录）
     private final Map<String, Boolean> loginStatus = new ConcurrentHashMap<>();
 
+    // 猎聘页面连接状态与登录状态分开维护，避免渲染瞬态被误报为退出登录
+    private enum LiepinLoginState { LOGGED_IN, LOGGED_OUT, UNKNOWN }
+    private volatile String liepinPageState = "MISSING";
+    private volatile String liepinLoginState = "UNKNOWN";
+    private volatile String liepinPageUrl;
+    private volatile String liepinStateMessage = "猎聘页面尚未连接";
+    private volatile long liepinLastCheckedAt;
+
     // 智联页面引用和登录状态分开维护，页面断开时不把已确认的登录直接判定为退出
     private enum ZhilianLoginState { LOGGED_IN, LOGGED_OUT, UNKNOWN }
     private volatile String zhilianPageState = "MISSING";
@@ -661,7 +669,10 @@ public class PlaywrightManager {
         }
 
         // 初始化登录状态并通知（如果有SSE连接会立即推送）
-        setLoginStatus("liepin", navigateSuccess && checkIfLiepinLoggedIn());
+        LiepinLoginState initialState = navigateSuccess
+                ? detectLiepinLoginState(liepinPage)
+                : LiepinLoginState.UNKNOWN;
+        setLiepinLoginState(initialState);
         // 设置登录状态监控
         setupLiepinLoginMonitoring(liepinPage);
     }
@@ -720,6 +731,40 @@ public class PlaywrightManager {
         }
     }
 
+    private void markLiepinPageConnected(Page page) {
+        liepinPageState = "CONNECTED";
+        liepinPageUrl = safePageUrl(page);
+        liepinLastCheckedAt = System.currentTimeMillis();
+        liepinStateMessage = "猎聘页面连接正常";
+    }
+
+    private void markLiepinPageState(String state, String message) {
+        liepinPageState = state;
+        liepinPageUrl = safePageUrl(liepinPage);
+        liepinLastCheckedAt = System.currentTimeMillis();
+        liepinStateMessage = message;
+    }
+
+    private void setLiepinLoginState(LiepinLoginState state) {
+        liepinLoginState = state.name();
+        if (state == LiepinLoginState.LOGGED_IN) {
+            setLoginStatus("liepin", true);
+        } else if (state == LiepinLoginState.LOGGED_OUT) {
+            setLoginStatus("liepin", false);
+        }
+    }
+
+    public Map<String, Object> getLiepinSessionStatus() {
+        Map<String, Object> status = new java.util.LinkedHashMap<>();
+        status.put("loginState", liepinLoginState);
+        status.put("pageState", liepinPageState);
+        status.put("pageAlive", "CONNECTED".equals(liepinPageState));
+        status.put("pageUrl", liepinPageUrl);
+        status.put("message", liepinStateMessage);
+        status.put("lastCheckedAt", liepinLastCheckedAt);
+        return status;
+    }
+
     private void recoverLiepinPageIfNeeded() {
         if (context == null || isLiepinPageReady(liepinPage)) {
             return;
@@ -736,13 +781,13 @@ public class PlaywrightManager {
         replacement.setDefaultTimeout(DEFAULT_TIMEOUT);
         if (navigateLiepinPage(replacement, "自动恢复")) {
             liepinPage = replacement;
+            setLiepinLoginState(detectLiepinLoginState(replacement));
             closePageQuietly(oldPage);
-            setLoginStatus("liepin", checkIfLiepinLoggedIn());
             setupLiepinLoginMonitoring(replacement);
             log.info("猎聘Page自动恢复完成");
         } else {
             closePageQuietly(replacement);
-            setLoginStatus("liepin", false);
+            markLiepinPageState("RECOVERING", "猎聘页面暂未渲染完成，正在重试");
             log.warn("猎聘Page自动恢复失败，保留原Page等待下一次重试");
         }
     }
@@ -752,34 +797,36 @@ public class PlaywrightManager {
      * 已登录：能找到用户头像 <img class="header-quick-menu-user-photo" ...>
      * 未登录：能找到 <span id="header-quick-menu-login">登录/注册</span>
      */
-    private boolean checkIfLiepinLoggedIn() {
+    private LiepinLoginState detectLiepinLoginState(Page page) {
         try {
-            if (!isLiepinPageReady(liepinPage)) {
+            if (!isLiepinPageReady(page)) {
+                markLiepinPageState("RECOVERING", "猎聘页面尚未渲染完成");
                 log.info("猎聘页面尚未渲染完成，暂不判定为已登录");
-                return false;
+                return LiepinLoginState.UNKNOWN;
             }
+            markLiepinPageConnected(page);
             // 先检查“登录/注册”入口是否可见，若可见则明确未登录
             try {
-                Locator loginEntry = liepinPage.locator(
+                Locator loginEntry = page.locator(
                     "#header-quick-menu-login, a[href*='login'], a[data-key='login'], button[data-key='login'], text=/登录|注册/").first();
                 if (loginEntry.isVisible()) {
                     log.info("检测到未登录猎聘，保持在登录页或首页等待扫码登录");
                     // 若不在登录页，则导航到登录页并尝试切换二维码
                     String currentUrl = null;
-                    try { currentUrl = liepinPage.url(); } catch (Exception ignored) {}
+                    try { currentUrl = page.url(); } catch (Exception ignored) {}
                     try {
                         if (currentUrl == null || !currentUrl.contains("/login")) {
-                            liepinPage.navigate("https://www.liepin.com/login");
+                            page.navigate("https://www.liepin.com/login");
                             try { Thread.sleep(800); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
                         }
                         // 优先点击官方切换二维码的容器
-                        Locator qrSwitch = liepinPage.locator(".switch-type-mask-img-box").first();
+                        Locator qrSwitch = page.locator(".switch-type-mask-img-box").first();
                         if (qrSwitch.isVisible()) {
                             qrSwitch.click();
                             log.info("已切换到猎聘二维码登录页面，等待用户扫码...");
                         } else {
                             // 兼容新版页面：图片资源名包含 qrcode-btn，需要点击其父级按钮
-                            Locator qrImg = liepinPage.locator("img[src*='qrcode-btn']").first();
+                            Locator qrImg = page.locator("img[src*='qrcode-btn']").first();
                             if (qrImg.count() > 0 && qrImg.isVisible()) {
                                 try {
                                     // 尝试点击父节点或最近的可点击容器
@@ -798,41 +845,52 @@ public class PlaywrightManager {
                     } catch (Exception e) {
                         log.debug("猎聘登录页引导/二维码切换失败: {}", e.getMessage());
                     }
-                    return false;
+                    return LiepinLoginState.LOGGED_OUT;
                 }
             } catch (Exception ignored) {}
 
             // 再检查已登录特征：用户信息容器或用户头像是否存在（无需强制可见）
             try {
-                if (liepinPage.locator("#header-quick-menu-user-info").count() > 0) {
+                if (page.locator("#header-quick-menu-user-info").count() > 0) {
                     log.debug("猎聘登录检测：存在用户信息容器，判定已登录");
-                    return true;
+                    return LiepinLoginState.LOGGED_IN;
                 }
             } catch (Exception ignored) {}
 
             try {
-                if (liepinPage.locator("img.header-quick-menu-user-photo, .header-quick-menu-user-photo").count() > 0) {
+                if (page.locator("img.header-quick-menu-user-photo, .header-quick-menu-user-photo").count() > 0) {
                     log.debug("猎聘登录检测：存在用户头像元素，判定已登录");
-                    return true;
+                    return LiepinLoginState.LOGGED_IN;
                 }
             } catch (Exception ignored) {}
 
             // 兜底：若不存在登录入口且也未找到明确已登录特征，按已登录处理（避免误判）
             try {
-                boolean loginEntryExists = liepinPage.locator("#header-quick-menu-login, a[href*='login']").count() > 0;
+                boolean loginEntryExists = page.locator("#header-quick-menu-login, a[href*='login']").count() > 0;
                 if (!loginEntryExists) {
                     log.info("猎聘登录检测：未发现登录入口，兜底判定为已登录");
-                    return true;
+                    return LiepinLoginState.LOGGED_IN;
                 }
             } catch (Exception ignored) {}
 
-            // 默认未登录
-            log.debug("猎聘登录检测：未匹配到明确特征，判定未登录");
-            return false;
+            log.debug("猎聘登录检测：未匹配到明确特征，暂不改变登录状态");
+            return LiepinLoginState.UNKNOWN;
         } catch (Exception e) {
             log.debug("猎聘登录检测异常: {}", e.getMessage());
+            markLiepinPageState("RECOVERING", "猎聘登录状态暂时无法确认");
+            return LiepinLoginState.UNKNOWN;
+        }
+    }
+
+    private boolean checkIfLiepinLoggedIn() {
+        LiepinLoginState state = detectLiepinLoginState(liepinPage);
+        if (state == LiepinLoginState.LOGGED_IN) {
+            return true;
+        }
+        if (state == LiepinLoginState.LOGGED_OUT) {
             return false;
         }
+        return Boolean.TRUE.equals(loginStatus.get("liepin"));
     }
 
     /**
@@ -2446,11 +2504,14 @@ public class PlaywrightManager {
      */
     private void checkLiepinLoginStatus(Page page) {
         try {
-            boolean isLoggedIn = checkIfLiepinLoggedIn();
-            // 如果登录状态发生变化（从未登录变为已登录）
             Boolean previousStatus = loginStatus.get("liepin");
-            if (isLoggedIn && (previousStatus == null || !previousStatus)) {
+            LiepinLoginState detectedState = detectLiepinLoginState(page);
+            // 如果登录状态发生变化（从未登录变为已登录）
+            if (detectedState == LiepinLoginState.LOGGED_IN
+                    && (previousStatus == null || !previousStatus)) {
                 onLiepinLoginSuccess();
+            } else {
+                setLiepinLoginState(detectedState);
             }
         } catch (Exception e) {
             // 忽略检查过程中的异常，避免影响正常流程
@@ -2465,6 +2526,7 @@ public class PlaywrightManager {
         log.info("猎聘平台登录成功");
 
         // 更新登录状态并通知
+        liepinLoginState = LiepinLoginState.LOGGED_IN.name();
         setLoginStatus("liepin", true);
 
         // 登录成功时保存 Cookie 到数据库
@@ -2879,6 +2941,16 @@ public class PlaywrightManager {
         status.put("message", zhilianStateMessage);
         status.put("lastCheckedAt", zhilianLastCheckedAt);
         return status;
+    }
+
+    public void markZhilianPageLost(String reason) {
+        gate.runIfIdle(() -> {
+            String detail = reason == null || reason.isBlank()
+                    ? "智联页面连接已断开"
+                    : reason;
+            markZhilianPageState("MISSING", detail);
+            log.warn("智联页面已标记为失联: {}", detail);
+        });
     }
 
     public boolean refreshZhilianLoginStatus() {

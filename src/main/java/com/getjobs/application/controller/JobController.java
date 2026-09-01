@@ -118,6 +118,7 @@ public class JobController {
             connectedStatus.put("liepinLoggedIn", liepinLoggedIn);
             connectedStatus.put("job51LoggedIn", job51LoggedIn);
             connectedStatus.put("zhilianLoggedIn", zhilianLoggedIn);
+            connectedStatus.putAll(playwrightManager.getLiepinSessionStatus());
             connectedStatus.putAll(playwrightManager.getZhilianSessionStatus());
 
             emitter.send(SseEmitter.event()
@@ -163,6 +164,8 @@ public class JobController {
                 statusData.put("timestamp", change.timestamp());
                 if ("zhilian".equals(change.platform())) {
                     statusData.putAll(playwrightManager.getZhilianSessionStatus());
+                } else if ("liepin".equals(change.platform())) {
+                    statusData.putAll(playwrightManager.getLiepinSessionStatus());
                 }
                 emitter.send(SseEmitter.event()
                         .name("login-status")

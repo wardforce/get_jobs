@@ -1,15 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8888'
+import { apiFetch } from '@/lib/api'
 
 export default function LagouPage() {
   const [loggedIn, setLoggedIn] = useState(false)
   const [message, setMessage] = useState('检查登录状态中...')
 
   const refresh = async () => {
-    const response = await fetch(`${API}/api/lagou/login-status`)
+    const response = await apiFetch('/api/lagou/login-status')
     const data = await response.json()
     setLoggedIn(Boolean(data.isLoggedIn))
     setMessage(data.isLoggedIn ? '拉勾已登录' : '请先登录拉勾')
@@ -27,7 +26,7 @@ export default function LagouPage() {
   }, [])
 
   const call = async (path: string) => {
-    const response = await fetch(`${API}/api/lagou/${path}`, { method: 'POST' })
+    const response = await apiFetch(`/api/lagou/${path}`, { method: 'POST' })
     const data = await response.json()
     setMessage(data.message || '操作完成')
     await refresh()

@@ -229,26 +229,26 @@ public class ZhilianService {
         zhilianJobDataMapper.insert(entity);
     }
 
-    public void markDeliveredByJobId(String jobId) {
-        if (jobId == null || jobId.trim().isEmpty()) return;
+    public int markDeliveredByJobId(String jobId) {
+        if (jobId == null || jobId.trim().isEmpty()) return 0;
         ZhilianJobDataEntity upd = new ZhilianJobDataEntity();
         upd.setDeliveryStatus("已投递");
         upd.setUpdateTime(LocalDateTime.now());
         com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<ZhilianJobDataEntity> uw =
                 new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<>();
         uw.eq("job_id", jobId);
-        zhilianJobDataMapper.update(upd, uw);
+        return zhilianJobDataMapper.update(upd, uw);
     }
 
-    public void markDeliveredByTitleAndCompany(String jobTitle, String companyName) {
-        if (jobTitle == null || companyName == null) return;
+    public int markDeliveredByTitleAndCompany(String jobTitle, String companyName) {
+        if (jobTitle == null || companyName == null) return 0;
         ZhilianJobDataEntity upd = new ZhilianJobDataEntity();
         upd.setDeliveryStatus("已投递");
         upd.setUpdateTime(LocalDateTime.now());
         com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<ZhilianJobDataEntity> uw =
                 new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<>();
         uw.eq("job_title", jobTitle).eq("company_name", companyName);
-        zhilianJobDataMapper.update(upd, uw);
+        return zhilianJobDataMapper.update(upd, uw);
     }
 
     // ==================== 投递分析（Dashboard）与列表 ====================

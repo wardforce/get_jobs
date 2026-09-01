@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import PageHeader from '@/app/components/PageHeader'
+import { apiFetch } from '@/lib/api'
 
 export default function AiConfigPage() {
   const [aiConfig, setAiConfig] = useState({
@@ -26,7 +27,7 @@ export default function AiConfigPage() {
 
   const fetchAiConfig = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/ai/config', {
+      const response = await apiFetch('/api/ai/config', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -45,7 +46,7 @@ export default function AiConfigPage() {
         })
       }
     } catch (error) {
-      console.error('加载AI配置失败:', error)
+      console.warn('加载AI配置失败:', error)
       // 如果加载失败，使用默认值，不影响用户使用
       console.log('使用默认配置')
     }
@@ -54,7 +55,7 @@ export default function AiConfigPage() {
   // 加载 boss_config 的 enable_ai 字段
   const fetchEnableAi = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/boss/config', {
+      const response = await apiFetch('/api/boss/config', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -70,7 +71,7 @@ export default function AiConfigPage() {
       const val = String(raw ?? '').trim().toLowerCase()
       setEnableAi(val === '1' || val === 'true' || val === 'on' ? 1 : Number(raw) === 1 ? 1 : 0)
     } catch (e) {
-      console.error('加载enable_ai失败:', e)
+      console.warn('加载enable_ai失败:', e)
     }
   }
 
@@ -79,7 +80,7 @@ export default function AiConfigPage() {
     try {
       const next = enableAi ? 0 : 1
       setEnableAi(next)
-      const response = await fetch('http://localhost:8888/api/boss/config', {
+      const response = await apiFetch('/api/boss/config', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -92,7 +93,7 @@ export default function AiConfigPage() {
       // 可选：校验返回体
       // const updated = await response.json()
     } catch (e) {
-      console.error('更新enable_ai失败:', e)
+      console.warn('更新enable_ai失败:', e)
       // 回滚
       setEnableAi((prev) => (prev ? 0 : 1))
       alert('切换失败，请检查后端服务连接')
@@ -103,7 +104,7 @@ export default function AiConfigPage() {
     setLoading(true)
     try {
       // 保存AI配置
-      const response = await fetch('http://localhost:8888/api/ai/config', {
+      const response = await apiFetch('/api/ai/config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -119,7 +120,7 @@ export default function AiConfigPage() {
         alert('保存失败: ' + result.message)
       }
     } catch (error) {
-      console.error('保存AI配置失败:', error)
+      console.warn('保存AI配置失败:', error)
       alert('保存失败，请检查服务器连接！')
     } finally {
       setLoading(false)

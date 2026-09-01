@@ -102,6 +102,7 @@ public class LiepinJobService extends InterruptibleJobPlatformService {
         status.put("platform", PLATFORM);
         status.put("isRunning", isRunning());
         status.put("isLoggedIn", playwrightManager.isLoggedIn(PLATFORM));
+        status.putAll(playwrightManager.getLiepinSessionStatus());
         status.put("maxDeliveryAttempts", DeliveryLimit.configuredMax());
         return status;
     }

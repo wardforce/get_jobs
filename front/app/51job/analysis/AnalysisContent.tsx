@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import PageHeader from "@/app/components/PageHeader"
 import { BiRefresh, BiDownload, BiBarChart, BiLineChart, BiPieChart, BiBriefcase } from "react-icons/bi"
+import { apiFetch } from "@/lib/api"
 
 type NameValue = { name: string; value: number }
 type BucketValue = { bucket: string; value: number }
@@ -57,7 +58,6 @@ type PagedResult51 = {
   size: number
 }
 
-const API_BASE = process.env.API_BASE_URL || "http://localhost:8888"
 const CATEGORY_COLORS = [
   "#3b82f6","#10b981","#f59e0b","#ef4444","#6366f1","#22c55e","#fb7185","#a78bfa","#f97316","#06b6d4"
 ]
@@ -103,7 +103,7 @@ export default function AnalysisContent({ showHeader = false }:{ showHeader?: bo
     if (keyword) params.set("keyword", keyword)
     params.set("page", String(toPage))
     params.set("size", String(toSize))
-    try{ setLoadingList(true); const res = await fetch(`${API_BASE}/api/51job/list?${params.toString()}`); const data:PagedResult51 = await res.json(); setItems(data.items||[]); setTotal(data.total||0); setPage(data.page||toPage); setSize(data.size||toSize) }catch(e){ console.error("fetch list failed",e) } finally { setLoadingList(false) }
+    try{ setLoadingList(true); const res = await apiFetch(`/api/51job/list?${params.toString()}`); const data:PagedResult51 = await res.json(); setItems(data.items||[]); setTotal(data.total||0); setPage(data.page||toPage); setSize(data.size||toSize) }catch(e){ console.warn("fetch list failed",e) } finally { setLoadingList(false) }
   }
 
   const loadStats = async ()=>{
@@ -115,7 +115,7 @@ export default function AnalysisContent({ showHeader = false }:{ showHeader?: bo
     if (minK) params.set("minK", String(Number(minK)))
     if (maxK) params.set("maxK", String(Number(maxK)))
     if (keyword) params.set("keyword", keyword)
-    try{ const res = await fetch(`${API_BASE}/api/51job/stats?${params.toString()}`); const data:StatsResponse = await res.json(); setStats(data) }catch(e){ console.error("fetch stats failed",e) }
+    try{ const res = await apiFetch(`/api/51job/stats?${params.toString()}`); const data:StatsResponse = await res.json(); setStats(data) }catch(e){ console.warn("fetch stats failed",e) }
   }
 
   // 初始分页只在页面挂载时加载。
@@ -123,7 +123,7 @@ export default function AnalysisContent({ showHeader = false }:{ showHeader?: bo
   useEffect(()=>{ loadList(1,size) },[])
 
   const onReload = async ()=>{
-    try{ setReloading(true); const res=await fetch(`${API_BASE}/api/51job/reload`); const data=await res.json(); console.log("reload",data); await loadList(1,size); await loadStats() }catch(e){ console.error("reload failed",e) } finally { setReloading(false) }
+    try{ setReloading(true); const res=await apiFetch("/api/51job/reload"); const data=await res.json(); console.log("reload",data); await loadList(1,size); await loadStats() }catch(e){ console.warn("reload failed",e) } finally { setReloading(false) }
   }
 
   const exportCSV = async ()=>{
@@ -138,7 +138,7 @@ export default function AnalysisContent({ showHeader = false }:{ showHeader?: bo
       if (keyword) baseParams.set("keyword", keyword)
 
       const pageSize=1000; let currentPage=1; let all:Job51Item[]=[]; let totalCount=0
-      while(true){ const params=new URLSearchParams(baseParams); params.set("page", String(currentPage)); params.set("size", String(pageSize)); const res=await fetch(`${API_BASE}/api/51job/list?${params.toString()}`); const data:PagedResult51=await res.json(); const chunk=data.items||[]; if (currentPage===1) totalCount=data.total||chunk.length; all=all.concat(chunk); if (all.length>=totalCount || chunk.length===0) break; currentPage+=1 }
+      while(true){ const params=new URLSearchParams(baseParams); params.set("page", String(currentPage)); params.set("size", String(pageSize)); const res=await apiFetch(`/api/51job/list?${params.toString()}`); const data:PagedResult51=await res.json(); const chunk=data.items||[]; if (currentPage===1) totalCount=data.total||chunk.length; all=all.concat(chunk); if (all.length>=totalCount || chunk.length===0) break; currentPage+=1 }
 
       const header=["公司名称","岗位名称","薪资","地点","经验","学历","HR","投递状态","链接","行业","公司规模","发布时间","创建时间"]
       const rows = all.map(it=>[
@@ -146,7 +146,7 @@ export default function AnalysisContent({ showHeader = false }:{ showHeader?: bo
       ])
       const csv = [header,...rows].map(r=>r.map(v=> (String(v).includes(",")?`"${String(v).replace(/"/g,'""')}"`:String(v))).join(",")).join("\n")
       const blob = new Blob([csv],{ type:"text/csv;charset=utf-8;" }); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`job51_jobs_${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url)
-    }catch(e){ console.error("export CSV failed",e); alert("导出失败，请稍后重试") } finally { setExporting(false) }
+    }catch(e){ console.warn("export CSV failed",e); alert("导出失败，请稍后重试") } finally { setExporting(false) }
   }
 
   const kpiCards = useMemo(()=>{ const k=stats?.kpi; return [ { title:"总岗位数", value:k?.total??0 }, { title:"已投递", value:k?.delivered??0 }, { title:"未投递", value:k?.pending??0 }, { title:"平均月薪(K)", value:k?.avgMonthlyK??0 } ] },[stats])

@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import PageHeader from '@/app/components/PageHeader'
 import AnalysisContent from '@/app/boss/analysis/AnalysisContent'
+import { API_BASE_URL, apiFetch } from '@/lib/api'
 
 interface BossConfig {
   id?: number
@@ -62,6 +63,7 @@ interface BlacklistItem {
 }
 
 export default function BossPage() {
+  const API = API_BASE_URL
   const [config, setConfig] = useState<BossConfig>({
     keywords: '',
     cityCode: '',
@@ -126,7 +128,7 @@ export default function BossPage() {
       return
     }
 
-    const client = createSSEWithBackoff('http://localhost:8888/api/jobs/login-status/stream', {
+    const client = createSSEWithBackoff(`${API}/api/jobs/login-status/stream`, {
       onOpen: () => {
         console.log('[SSE] 连接已打开')
       },
@@ -143,7 +145,7 @@ export default function BossPage() {
               setIsLoggedIn(data.bossLoggedIn || false)
               setCheckingLogin(false)
             } catch (error) {
-              console.error('[SSE] 解析连接消息失败:', error)
+              console.warn('[SSE] 解析连接消息失败:', error)
             }
           },
         },
@@ -157,14 +159,14 @@ export default function BossPage() {
                 setCheckingLogin(false)
               }
             } catch (error) {
-              console.error('[SSE] 解析登录状态消息失败:', error)
+              console.warn('[SSE] 解析登录状态消息失败:', error)
             }
           },
         },
         { name: 'ping', handler: () => {} },
       ],
     })
-    const progressClient = createSSEWithBackoff('http://localhost:8888/api/boss/stream', {
+    const progressClient = createSSEWithBackoff(`${API}/api/boss/stream`, {
       listeners: [
         {
           name: 'progress',
@@ -188,7 +190,7 @@ export default function BossPage() {
                 setStatsVersion((version) => version + 1)
               }
             } catch (error) {
-              console.error('[Boss SSE] 解析投递进度失败:', error)
+              console.warn('[Boss SSE] 解析投递进度失败:', error)
             }
           },
         },
@@ -206,7 +208,7 @@ export default function BossPage() {
 
   const fetchDeliveryStatus = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/boss/status')
+      const response = await apiFetch('/api/boss/status')
       if (response.ok) {
         const data = await response.json()
         setIsDelivering(Boolean(data.isRunning))
@@ -218,7 +220,7 @@ export default function BossPage() {
 
   const fetchAllData = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/boss/config')
+      const response = await apiFetch('/api/boss/config')
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)
       }
@@ -427,7 +429,7 @@ export default function BossPage() {
         stage: toBracketList(selectedStage),
         salary: toBracketList(selectedSalary),
       }
-      const response = await fetch('http://localhost:8888/api/boss/config', {
+      const response = await apiFetch('/api/boss/config', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -438,7 +440,7 @@ export default function BossPage() {
       if (response.ok) {
         // 统一保存 Cookie（Boss）
         try {
-          await fetch('http://localhost:8888/api/cookie/save?platform=boss', { method: 'POST' })
+          await apiFetch('/api/cookie/save?platform=boss', { method: 'POST' })
         } catch (e) {
           console.warn('保存 Cookie 失败（Boss）:', e)
         }
@@ -457,7 +459,7 @@ export default function BossPage() {
         }
       }
     } catch (error) {
-      console.error('Failed to save config:', error)
+      console.warn('Failed to save config:', error)
       // 保存失败：不弹框
       if (!silent) {
         setSaveResult({ success: false, message: '保存失败：网络或服务异常。' })
@@ -473,7 +475,7 @@ export default function BossPage() {
     }
 
     try {
-      const response = await fetch('http://localhost:8888/api/boss/config/blacklist', {
+      const response = await apiFetch('/api/boss/config/blacklist', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -492,14 +494,14 @@ export default function BossPage() {
         console.warn('添加黑名单失败：后端返回非 2xx 状态')
       }
     } catch (error) {
-      console.error('Failed to add blacklist:', error)
+      console.warn('Failed to add blacklist:', error)
       // 添加失败：不弹框
     }
   }
 
   const handleDeleteBlacklist = async (id: number) => {
     try {
-      const response = await fetch(`http://localhost:8888/api/boss/config/blacklist/${id}`, {
+      const response = await apiFetch(`/api/boss/config/blacklist/${id}`, {
         method: 'DELETE',
       })
 
@@ -510,7 +512,7 @@ export default function BossPage() {
         console.warn('删除黑名单失败：后端返回非 2xx 状态')
       }
     } catch (error) {
-      console.error('Failed to delete blacklist:', error)
+      console.warn('Failed to delete blacklist:', error)
       // 删除失败：不弹框
     }
   }
@@ -518,7 +520,7 @@ export default function BossPage() {
   const handleStartDelivery = async () => {
     try {
       setIsDelivering(true)
-      const response = await fetch('http://localhost:8888/api/boss/start', {
+      const response = await apiFetch('/api/boss/start', {
         method: 'POST',
       })
       if (!response.ok) {
@@ -534,7 +536,7 @@ export default function BossPage() {
         setIsDelivering(false)
       }
     } catch (error) {
-      console.error('Failed to start delivery:', error)
+      console.warn('Failed to start delivery:', error)
       // 启动失败：不弹框
       setIsDelivering(false)
     }
@@ -542,7 +544,7 @@ export default function BossPage() {
 
   const handleStopDelivery = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/boss/stop', {
+      const response = await apiFetch('/api/boss/stop', {
         method: 'POST',
       })
       if (!response.ok) {
@@ -559,7 +561,7 @@ export default function BossPage() {
         setIsDelivering(false)
       }
     } catch (error) {
-      console.error('Failed to stop delivery:', error)
+      console.warn('Failed to stop delivery:', error)
       // 停止失败：也要将状态设置为未投递
       setIsDelivering(false)
     }
@@ -567,7 +569,7 @@ export default function BossPage() {
 
   const triggerLogout = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/boss/logout', { method: 'POST' })
+      const response = await apiFetch('/api/boss/logout', { method: 'POST' })
       const data = await response.json()
       if (data.success) {
         setIsLoggedIn(false)
@@ -581,7 +583,7 @@ export default function BossPage() {
         setShowLogoutResultDialog(true)
       }
     } catch (error) {
-      console.error('Failed to logout:', error)
+      console.warn('Failed to logout:', error)
       setLogoutResult({ success: false, message: '退出登录失败：网络或服务异常。' })
       setShowLogoutResultDialog(true)
     }
@@ -596,7 +598,7 @@ export default function BossPage() {
     setCookieLoginLoading(true)
     setCookieLoginMessage(null)
     try {
-      const response = await fetch('http://localhost:8888/api/boss/cookie-login', {
+      const response = await apiFetch('/api/boss/cookie-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cookie: cookieInput }),

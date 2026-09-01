@@ -51,6 +51,8 @@ public class ZhiLian {
     private static final String SUCCESS_POPUP_SELECTOR = "body:has-text(\"投递成功\")";
     private static final double SUCCESS_POPUP_TIMEOUT_MS = 15_000;
     private static final double SUCCESS_POPUP_CLOSE_TIMEOUT_MS = 5_000;
+    private static final String APPLY_WORKFLOW_MODAL_SELECTOR =
+            "div.a-modal.a-job-apply-workflow-close, div.a-job-apply-workflow-close";
 
     private final ZhilianService zhilianService;
 
@@ -65,6 +67,33 @@ public class ZhiLian {
             this.jobId = jobId;
             this.jobTitle = jobTitle;
             this.companyName = companyName;
+        }
+    }
+
+    static boolean isDeliveryLimitMessage(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        return text.contains("投递已超过上限")
+                || text.contains("投递已达上限")
+                || text.contains("达到上限")
+                || text.contains("明天再试");
+    }
+
+    static boolean isPageClosedFailure(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if ("TargetClosedError".equals(current.getClass().getSimpleName())
+                    || (current.getMessage() != null
+                    && current.getMessage().contains("Target page, context or browser has been closed"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static class ZhilianPageLostException extends RuntimeException {
+        public ZhilianPageLostException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -121,7 +150,12 @@ public class ZhiLian {
 
         } catch (ZhilianAuthenticationExpiredException e) {
             throw e;
+        } catch (ZhilianPageLostException e) {
+            throw e;
         } catch (Exception e) {
+            if (isPageClosedFailure(e)) {
+                throw new ZhilianPageLostException("智联招聘页面已断开，停止当前任务", e);
+            }
             log.error("智联招聘投递过程出现异常", e);
             sendProgress("投递出现异常: " + e.getMessage(), null, null);
         }
@@ -157,6 +191,9 @@ public class ZhiLian {
                 try { keywordInput.press("Enter"); } catch (Exception ignored) {}
                 PlaywrightUtil.sleep(2);
             } catch (Exception e) {
+                if (isPageClosedFailure(e)) {
+                    throw new ZhilianPageLostException("智联招聘页面已断开，停止当前任务", e);
+                }
                 log.warn("搜索框输入关键词失败，跳过当前关键词: {}", e.getMessage());
                 return;
             }
@@ -166,6 +203,9 @@ public class ZhiLian {
                 page.waitForSelector("div.joblist-box__item",
                     new Page.WaitForSelectorOptions().setTimeout(10_000));
             } catch (Exception e) {
+                if (isPageClosedFailure(e)) {
+                    throw new ZhilianPageLostException("智联招聘页面已断开，停止当前任务", e);
+                }
                 log.warn("等待岗位列表超时，跳过当前关键词");
                 return;
             }
@@ -186,6 +226,9 @@ public class ZhiLian {
                     page.waitForSelector("div.positionlist",
                         new Page.WaitForSelectorOptions().setTimeout(10_000));
                 } catch (Exception e) {
+                    if (isPageClosedFailure(e)) {
+                        throw new ZhilianPageLostException("智联招聘页面已断开，停止当前任务", e);
+                    }
                     log.warn("等待岗位列表失败，刷新页面重试");
                     page.reload();
                     PlaywrightUtil.sleep(1);
@@ -220,9 +263,14 @@ public class ZhiLian {
             log.info("关键词【{}】投递完成", keyword);
         } catch (ZhilianAuthenticationExpiredException e) {
             throw e;
+        } catch (ZhilianPageLostException e) {
+            throw e;
         } catch (ZhilianPopupCloseException e) {
             throw e;
         } catch (Exception e) {
+            if (isPageClosedFailure(e)) {
+                throw new ZhilianPageLostException("智联招聘页面已断开，停止当前任务", e);
+            }
             log.error("投递关键词【{}】时出现异常", keyword, e);
         }
     }
@@ -318,6 +366,11 @@ public class ZhiLian {
                     return false;
                 }
 
+                if (checkIsLimit()) {
+                    sendProgress("今日投递已达上限，停止后续岗位", null, null);
+                    return false;
+                }
+
                 Locator card = page.locator("div.joblist-box__item").nth(pj.index);
                 Locator applyBtn = card.locator("button.collect-and-apply__btn");
                 if (applyBtn.count() == 0) {
@@ -330,12 +383,21 @@ public class ZhiLian {
                     ensureZhilianSession();
 
                     try {
+                        int affectedRows = 0;
                         if (pj.jobId != null && !pj.jobId.isEmpty()) {
-                            zhilianService.markDeliveredByJobId(pj.jobId);
-                            log.info("已标记投递：jobId={}，title={}，company={}", pj.jobId, pj.jobTitle, pj.companyName);
+                            affectedRows = zhilianService.markDeliveredByJobId(pj.jobId);
+                            log.info("已标记投递：jobId={}，title={}，company={}，更新行数={}",
+                                    pj.jobId, pj.jobTitle, pj.companyName, affectedRows);
                         } else if (pj.jobTitle != null && pj.companyName != null) {
-                            zhilianService.markDeliveredByTitleAndCompany(pj.jobTitle, pj.companyName);
-                            log.info("已标记投递：title={}，company={}", pj.jobTitle, pj.companyName);
+                            affectedRows = zhilianService.markDeliveredByTitleAndCompany(pj.jobTitle, pj.companyName);
+                            log.info("已标记投递：title={}，company={}，更新行数={}",
+                                    pj.jobTitle, pj.companyName, affectedRows);
+                        }
+                        if (affectedRows > 0) {
+                            resultList.add(toResultJob(pj));
+                        } else {
+                            log.warn("投递成功但未更新数据库记录：jobId={}，title={}，company={}",
+                                    pj.jobId, pj.jobTitle, pj.companyName);
                         }
                     } catch (Exception ex) {
                         log.warn("更新投递状态失败: {}", ex.getMessage());
@@ -346,7 +408,14 @@ public class ZhiLian {
                     log.error("投递成功弹窗未能关闭，停止当前投递流程: {}", e.getMessage());
                     throw e;
                 } catch (Exception clickEx) {
+                    if (isPageClosedFailure(clickEx)) {
+                        throw new ZhilianPageLostException("智联招聘页面已断开，停止当前任务", clickEx);
+                    }
                     log.warn("投递失败，继续下一个岗位: {}", clickEx.getMessage());
+                    if (checkIsLimit()) {
+                        sendProgress("今日投递已达上限，停止后续岗位", null, null);
+                        return false;
+                    }
                 }
 
                 if (checkIsLimit()) {
@@ -358,9 +427,14 @@ public class ZhiLian {
             return true;
         } catch (ZhilianAuthenticationExpiredException e) {
             throw e;
+        } catch (ZhilianPageLostException e) {
+            throw e;
         } catch (ZhilianPopupCloseException e) {
             throw e;
         } catch (Exception e) {
+            if (isPageClosedFailure(e)) {
+                throw new ZhilianPageLostException("智联招聘页面已断开，停止当前任务", e);
+            }
             log.error("投递当前页面失败", e);
             try {
                 saveCurrentPageHtml();
@@ -565,19 +639,54 @@ public class ZhiLian {
     private boolean checkIsLimit() {
         try {
             PlaywrightUtil.sleep(1);
-            Locator result = page.locator("//div[@class='a-job-apply-workflow']");
-            if (result.count() > 0) {
-                String text = result.textContent();
-                if (text != null && text.contains("达到上限")) {
+            Locator modals = page.locator(APPLY_WORKFLOW_MODAL_SELECTOR);
+            int count = Math.min(modals.count(), 10);
+            for (int i = 0; i < count; i++) {
+                Locator modal = modals.nth(i);
+                if (!modal.isVisible()) {
+                    continue;
+                }
+                String text = modal.textContent();
+                if (isDeliveryLimitMessage(text)) {
                     log.info("今日投递已达上限！");
                     isLimit = true;
+                    closeWorkflowModal(modal);
                     return true;
                 }
             }
             return false;
         } catch (Exception e) {
+            if (isPageClosedFailure(e)) {
+                throw new ZhilianPageLostException("智联招聘页面已断开，停止当前任务", e);
+            }
             return false;
         }
+    }
+
+    private void closeWorkflowModal(Locator modal) {
+        String[] closeSelectors = {
+                "button:has-text(\"知道了\")",
+                "button:has-text(\"关闭\")",
+                "[aria-label=\"关闭\"]",
+                "button"
+        };
+        for (String selector : closeSelectors) {
+            try {
+                Locator close = modal.locator(selector).first();
+                if (close.count() > 0 && close.isVisible()) {
+                    close.click(new Locator.ClickOptions().setTimeout(3000));
+                    return;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private Job toResultJob(PageJob pageJob) {
+        Job job = new Job();
+        job.setJobName(pageJob.jobTitle);
+        job.setCompanyName(pageJob.companyName);
+        return job;
     }
 
     /**

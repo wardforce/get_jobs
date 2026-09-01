@@ -11,6 +11,9 @@ import { Select } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import AnalysisContent from '@/app/zhilian/analysis/AnalysisContent'
 import PageHeader from '@/app/components/PageHeader'
+import { API_BASE_URL, apiFetch } from '@/lib/api'
+
+const API = API_BASE_URL
 
 interface ZhilianConfig {
   id?: number
@@ -64,7 +67,7 @@ export default function ZhilianPage() {
       return
     }
 
-    const client = createSSEWithBackoff('http://localhost:8888/api/jobs/login-status/stream', {
+    const client = createSSEWithBackoff(`${API}/api/jobs/login-status/stream`, {
       onOpen: () => console.log('[智联招聘 SSE] 连接已打开'),
       onError: (e, attempt, delay) => {
         console.warn(`[智联招聘 SSE] 连接错误，第${attempt}次重连，延迟 ${delay}ms`, e)
@@ -81,7 +84,7 @@ export default function ZhilianPage() {
               applySessionStatus({ ...data, isLoggedIn: data.zhilianLoggedIn })
               setCheckingLogin(false)
             } catch (error) {
-              console.error('[智联招聘 SSE] 解析连接消息失败:', error)
+              console.warn('[智联招聘 SSE] 解析连接消息失败:', error)
             }
           },
         },
@@ -97,7 +100,7 @@ export default function ZhilianPage() {
                 setCheckingLogin(false)
               }
             } catch (error) {
-              console.error('[智联招聘 SSE] 解析登录状态消息失败:', error)
+              console.warn('[智联招聘 SSE] 解析登录状态消息失败:', error)
             }
           },
         },
@@ -136,7 +139,7 @@ export default function ZhilianPage() {
 
   const fetchAllData = async () => {
     try {
-      const res = await fetch('http://localhost:8888/api/zhilian/config')
+      const res = await apiFetch('/api/zhilian/config')
       const data = await res.json()
       if (data.config) {
         const normalized = { ...data.config }
@@ -145,7 +148,7 @@ export default function ZhilianPage() {
       }
       if (data.options) setOptions(data.options)
     } catch (e) {
-      console.error('[智联] 获取配置失败:', e)
+      console.warn('[智联] 获取配置失败:', e)
     } finally {
       setLoadingConfig(false)
     }
@@ -155,7 +158,7 @@ export default function ZhilianPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('http://localhost:8888/api/zhilian/config', { method: 'GET' })
+        const res = await apiFetch('/api/zhilian/config', { method: 'GET' })
         const ok = !!res && res.ok
         if (ok) {
           await fetchAllData()
@@ -174,7 +177,7 @@ export default function ZhilianPage() {
 
     const syncDeliveryStatus = async () => {
       try {
-        const response = await fetch('http://localhost:8888/api/zhilian/status', {
+        const response = await apiFetch('/api/zhilian/status', {
           method: 'GET',
           cache: 'no-store',
         })
@@ -206,7 +209,7 @@ export default function ZhilianPage() {
     try {
       setIsStopping(false)
       setIsDelivering(true)
-      const response = await fetch('http://localhost:8888/api/zhilian/start', { method: 'POST' })
+      const response = await apiFetch('/api/zhilian/start', { method: 'POST' })
       const data = await response.json()
       if (!data.success) setIsDelivering(false)
     } catch {
@@ -218,7 +221,7 @@ export default function ZhilianPage() {
     try {
       setPageState('RECOVERING')
       setCheckingLogin(true)
-      const response = await fetch('http://localhost:8888/api/zhilian/login', { method: 'POST' })
+      const response = await apiFetch('/api/zhilian/login', { method: 'POST' })
       const data = await response.json()
       if (!data.success) setPageState('MISSING')
     } catch {
@@ -231,7 +234,7 @@ export default function ZhilianPage() {
   const handleStopDelivery = async () => {
     try {
       setIsStopping(true)
-      const response = await fetch('http://localhost:8888/api/zhilian/stop', { method: 'POST' })
+      const response = await apiFetch('/api/zhilian/stop', { method: 'POST' })
       const data = await response.json()
       if (!data.success) setIsStopping(false)
     } catch {
@@ -241,7 +244,7 @@ export default function ZhilianPage() {
 
   const triggerLogout = async () => {
     try {
-      const response = await fetch('http://localhost:8888/api/zhilian/logout', { method: 'POST' })
+      const response = await apiFetch('/api/zhilian/logout', { method: 'POST' })
       const data = await response.json()
       setIsLoggedIn(false)
       setLoginState('LOGGED_OUT')
@@ -256,13 +259,13 @@ export default function ZhilianPage() {
   const handleSaveConfig = async () => {
     try {
       const payload = { ...config, keywords: serializeKeywordsForDb(config.keywords) }
-      const response = await fetch('http://localhost:8888/api/zhilian/config', {
+      const response = await apiFetch('/api/zhilian/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
       if (response.ok) {
-        try { await fetch('http://localhost:8888/api/cookie/save?platform=zhilian', { method: 'POST' }) } catch {}
+        try { await apiFetch('/api/cookie/save?platform=zhilian', { method: 'POST' }) } catch {}
         await fetchAllData()
         setSaveResult({ success: true, message: '保存成功，配置已更新。' })
       } else {
@@ -270,7 +273,7 @@ export default function ZhilianPage() {
       }
       setShowSaveDialog(true)
     } catch (error) {
-      console.error('[智联] 保存配置失败:', error)
+      console.warn('[智联] 保存配置失败:', error)
       setSaveResult({ success: false, message: '保存失败：网络或服务异常。' })
       setShowSaveDialog(true)
     }
