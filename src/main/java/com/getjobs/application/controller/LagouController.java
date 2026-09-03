@@ -41,7 +41,11 @@ public class LagouController {
 
     @GetMapping("/login-status")
     public ResponseEntity<Map<String, Object>> loginStatus() {
-        return ResponseEntity.ok(Map.of("success", true, "isLoggedIn", playwrightManager.isLoggedIn("lagou")));
+        try { playwrightManager.refreshLagouLoginStatus(); } catch (Exception ignored) { }
+        Map<String, Object> result = new HashMap<>(playwrightManager.getLagouSessionStatus());
+        result.put("success", true);
+        result.put("isLoggedIn", "LOGGED_IN".equals(result.get("loginState")));
+        return ResponseEntity.ok(result);
     }
 
     @PostMapping("/login")
@@ -96,7 +100,12 @@ public class LagouController {
     @PostMapping("/start")
     public ResponseEntity<Map<String, Object>> start() {
         try {
-            if (!playwrightManager.isLoggedIn("lagou")) {
+            try { playwrightManager.refreshLagouLoginStatus(); } catch (Exception ignored) { }
+            String loginState = String.valueOf(playwrightManager.getLagouSessionStatus().get("loginState"));
+            if ("UNKNOWN".equals(loginState)) {
+                return ResponseEntity.status(409).body(Map.of("success", false, "message", "拉勾页面正在重新连接，请稍后再试", "status", "unknown"));
+            }
+            if (!"LOGGED_IN".equals(loginState)) {
                 return ResponseEntity.badRequest().body(Map.of("success", false, "message", "请先登录拉勾", "status", "not_logged_in"));
             }
             boolean started = lagouJobService.startDelivery(this::sendProgress);

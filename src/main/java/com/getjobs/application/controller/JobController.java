@@ -122,6 +122,10 @@ public class JobController {
             connectedStatus.put("lagouLoggedIn", lagouLoggedIn);
             connectedStatus.putAll(playwrightManager.getLiepinSessionStatus());
             connectedStatus.putAll(playwrightManager.getZhilianSessionStatus());
+            Map<String, Object> lagouSession = playwrightManager.getLagouSessionStatus();
+            connectedStatus.put("lagouLoginState", lagouSession.get("loginState"));
+            connectedStatus.put("lagouPageState", lagouSession.get("pageState"));
+            connectedStatus.put("lagouStateMessage", lagouSession.get("message"));
 
             emitter.send(SseEmitter.event()
                     .name("connected")
@@ -168,6 +172,11 @@ public class JobController {
                     statusData.putAll(playwrightManager.getZhilianSessionStatus());
                 } else if ("liepin".equals(change.platform())) {
                     statusData.putAll(playwrightManager.getLiepinSessionStatus());
+                } else if ("lagou".equals(change.platform())) {
+                    Map<String, Object> lagouSession = playwrightManager.getLagouSessionStatus();
+                    statusData.put("loginState", lagouSession.get("loginState"));
+                    statusData.put("pageState", lagouSession.get("pageState"));
+                    statusData.put("message", lagouSession.get("message"));
                 }
                 emitter.send(SseEmitter.event()
                         .name("login-status")

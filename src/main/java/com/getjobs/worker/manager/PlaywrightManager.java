@@ -103,6 +103,14 @@ public class PlaywrightManager {
     private volatile long zhilianLastCheckedAt;
     private final Set<Page> zhilianMonitoredPages = ConcurrentHashMap.newKeySet();
 
+    // 拉勾页面连接状态与登录状态分开维护，避免导航/验证码渲染瞬态误报退出
+    static enum LagouLoginState { LOGGED_IN, LOGGED_OUT, UNKNOWN }
+    private volatile String lagouPageState = "MISSING";
+    private volatile String lagouLoginState = LagouLoginState.UNKNOWN.name();
+    private volatile String lagouPageUrl;
+    private volatile String lagouStateMessage = "拉勾页面尚未连接";
+    private volatile long lagouLastCheckedAt;
+
     // 登录状态监听器
     private final List<Consumer<LoginStatusChange>> loginStatusListeners = new CopyOnWriteArrayList<>();
 
@@ -1884,7 +1892,7 @@ public class PlaywrightManager {
         } catch (Exception e) {
             log.warn("拉勾页面初始化失败: {}", e.getMessage());
         }
-        setLoginStatus("lagou", checkIfLagouLoggedIn());
+        setLagouLoginState(detectLagouLoginState(lagouPage));
         lagouPage.onFrameNavigated(frame -> {
             if (frame == lagouPage.mainFrame() && !lagouMonitoringPaused) {
                 gate.run(this::checkLagouLoginStatus);
@@ -1916,32 +1924,92 @@ public class PlaywrightManager {
     }
 
     private boolean checkIfLagouLoggedIn() {
-        try {
-            Locator loginEntry = lagouPage.locator(
-                    "a[href*='login'], button:has-text('登录'), text=/登录|注册/").first();
-            if (loginEntry.isVisible()) {
-                return false;
-            }
-            return lagouPage.locator(".user-info, .header__nav__item--user, a[href*='user']")
-                    .first().isVisible();
-        } catch (Exception e) {
-            return false;
+        LagouLoginState state = detectLagouLoginState(lagouPage);
+        if (state == LagouLoginState.LOGGED_IN) return true;
+        if (state == LagouLoginState.LOGGED_OUT) return false;
+        return Boolean.TRUE.equals(loginStatus.get("lagou"));
+    }
+
+    private LagouLoginState detectLagouLoginState(Page page) {
+        if (page == null || isPageClosed(page)) {
+            markLagouPageState("MISSING", "拉勾页面连接已断开，正在重新绑定");
+            return LagouLoginState.UNKNOWN;
         }
+        try {
+            markLagouPageConnected(page);
+            boolean loggedInMarker = hasVisibleLagouElement(page,
+                    ".user-info, .header__nav__item--user, [class*='user-info'], "
+                            + "[class*='username'], a[href*='/user'], a[href*='/resume'], "
+                            + "a:has-text('我的简历'), a:has-text('退出登录')");
+            boolean loginMarker = hasVisibleLagouElement(page,
+                    "a[href*='login'], button:has-text('登录'), [class*='login']");
+            String bodyText = "";
+            try {
+                Locator body = page.locator("body");
+                if (body.count() > 0) bodyText = body.innerText();
+            } catch (Exception ignored) { }
+            return classifyLagouLoginState(bodyText, loggedInMarker, loginMarker);
+        } catch (Exception e) {
+            markLagouPageState("RECOVERING", "拉勾登录状态暂时无法确认");
+            log.debug("检查拉勾登录状态失败: {}", e.getMessage());
+            return LagouLoginState.UNKNOWN;
+        }
+    }
+
+    static LagouLoginState classifyLagouLoginState(String bodyText,
+                                                    boolean loggedInMarker,
+                                                    boolean loginMarker) {
+        String text = bodyText == null ? "" : bodyText;
+        if (loggedInMarker || text.contains("我的简历") || text.contains("退出登录")) {
+            return LagouLoginState.LOGGED_IN;
+        }
+        if (loginMarker) return LagouLoginState.LOGGED_OUT;
+        return LagouLoginState.UNKNOWN;
+    }
+
+    private boolean hasVisibleLagouElement(Page page, String selector) {
+        try {
+            Locator elements = page.locator(selector);
+            for (int i = 0; i < elements.count(); i++) {
+                if (elements.nth(i).isVisible()) return true;
+            }
+        } catch (Exception ignored) { }
+        return false;
     }
 
     private void checkLagouLoginStatus() {
         try {
-            boolean loggedIn = checkIfLagouLoggedIn();
-            Boolean previous = loginStatus.get("lagou");
-            if (loggedIn && !Boolean.TRUE.equals(previous)) {
-                setLoginStatus("lagou", true);
+            LagouLoginState detectedState = detectLagouLoginState(lagouPage);
+            if (detectedState == LagouLoginState.UNKNOWN) return;
+            LagouLoginState previous = LagouLoginState.valueOf(lagouLoginState);
+            setLagouLoginState(detectedState);
+            if (detectedState == LagouLoginState.LOGGED_IN && previous != LagouLoginState.LOGGED_IN) {
                 saveLagouCookiesToDatabase("login success");
-            } else if (!loggedIn && Boolean.TRUE.equals(previous)) {
-                setLoginStatus("lagou", false);
             }
         } catch (Exception e) {
             log.debug("检查拉勾登录状态失败: {}", e.getMessage());
         }
+    }
+
+    private void setLagouLoginState(LagouLoginState state) {
+        if (state == null) state = LagouLoginState.UNKNOWN;
+        lagouLoginState = state.name();
+        if (state == LagouLoginState.LOGGED_IN) setLoginStatus("lagou", true);
+        else if (state == LagouLoginState.LOGGED_OUT) setLoginStatus("lagou", false);
+    }
+
+    private void markLagouPageConnected(Page page) {
+        lagouPageState = "CONNECTED";
+        lagouPageUrl = safePageUrl(page);
+        lagouLastCheckedAt = System.currentTimeMillis();
+        lagouStateMessage = "拉勾页面连接正常";
+    }
+
+    private void markLagouPageState(String state, String message) {
+        lagouPageState = state;
+        lagouPageUrl = safePageUrl(lagouPage);
+        lagouLastCheckedAt = System.currentTimeMillis();
+        lagouStateMessage = message;
     }
 
     /** 打开拉勾登录页，用户完成站点要求的验证或登录后自动保存 Cookie。 */
@@ -2984,6 +3052,25 @@ public class PlaywrightManager {
         ));
     }
 
+    public Map<String, Object> getLagouSessionStatus() {
+        Map<String, Object> status = new java.util.LinkedHashMap<>();
+        status.put("loginState", lagouLoginState);
+        status.put("pageState", lagouPageState);
+        status.put("pageAlive", "CONNECTED".equals(lagouPageState));
+        status.put("pageUrl", lagouPageUrl);
+        status.put("message", lagouStateMessage);
+        status.put("lastCheckedAt", lagouLastCheckedAt);
+        return status;
+    }
+
+    public boolean refreshLagouLoginStatus() {
+        return gate.call(() -> {
+            LagouLoginState detectedState = detectLagouLoginState(lagouPage);
+            if (detectedState != LagouLoginState.UNKNOWN) setLagouLoginState(detectedState);
+            return detectedState == LagouLoginState.LOGGED_IN;
+        });
+    }
+
     /**
      * 注册登录状态监听器
      *
@@ -3027,6 +3114,13 @@ public class PlaywrightManager {
                     : ("CONNECTED".equals(zhilianPageState)
                     ? ZhilianLoginState.LOGGED_OUT.name()
                     : ZhilianLoginState.UNKNOWN.name());
+        }
+        if ("lagou".equals(platform)) {
+            lagouLoginState = isLoggedIn
+                    ? LagouLoginState.LOGGED_IN.name()
+                    : ("CONNECTED".equals(lagouPageState)
+                    ? LagouLoginState.LOGGED_OUT.name()
+                    : LagouLoginState.UNKNOWN.name());
         }
 
         // 只有状态真正发生变化时才更新和通知

@@ -31,6 +31,12 @@ public class LagouJobService extends InterruptibleJobPlatformService {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "拉勾页面未初始化"));
                 return;
             }
+            try { playwrightManager.refreshLagouLoginStatus(); } catch (Exception ignored) { }
+            Map<String, Object> sessionStatus = playwrightManager.getLagouSessionStatus();
+            if ("UNKNOWN".equals(sessionStatus.get("loginState"))) {
+                progressCallback.accept(JobProgressMessage.error(PLATFORM, "拉勾页面正在重新连接，请稍后再试"));
+                return;
+            }
             if (!playwrightManager.isLoggedIn(PLATFORM)) {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "请先登录拉勾"));
                 return;
@@ -67,9 +73,10 @@ public class LagouJobService extends InterruptibleJobPlatformService {
     @Override public Map<String, Object> getStatus() {
         Map<String, Object> status = new HashMap<>();
         status.put("platform", PLATFORM); status.put("isRunning", isRunning());
+        try { playwrightManager.refreshLagouLoginStatus(); } catch (Exception ignored) { }
         status.put("isLoggedIn", playwrightManager.isLoggedIn(PLATFORM));
         status.put("maxDeliveryAttempts", DeliveryLimit.configuredMax());
-        try { status.putAll(playwrightManager.getLagouPageStatus()); }
+        try { status.putAll(playwrightManager.getLagouSessionStatus()); }
         catch (Exception e) { status.put("pageState", "MISSING"); status.put("pageMessage", e.getMessage()); }
         return status;
     }
