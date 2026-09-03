@@ -208,10 +208,6 @@ public class LagouController {
         config.setKeywords(OBJECT_MAPPER.writeValueAsString(keywords));
         if (config.getCity() == null || config.getCity().isBlank()) config.setCity("全国");
         config.setCity(config.getCity().trim());
-        if (!"全国".equals(config.getCity()) && lagouService.getOptionsByType("city").stream()
-                .noneMatch(option -> config.getCity().equals(option.getName()))) {
-            throw new IllegalArgumentException("城市不在拉勾支持列表中: " + config.getCity());
-        }
         if (config.getResumeType() == null || config.getResumeType().isBlank()) config.setResumeType("ONLINE");
         if (!"ONLINE".equalsIgnoreCase(config.getResumeType()) && !"ATTACHMENT".equalsIgnoreCase(config.getResumeType())) throw new IllegalArgumentException("resumeType 只能是 ONLINE 或 ATTACHMENT");
         config.setResumeType(config.getResumeType().toUpperCase());
