@@ -1,54 +1,43 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { apiFetch } from '@/lib/api'
+import { BiBriefcase, BiLogIn, BiLogOut, BiPlay, BiSave, BiStop } from 'react-icons/bi'
+import { createSSEWithBackoff } from '@/lib/sse'
+import { API_BASE_URL, apiFetch } from '@/lib/api'
+import PageHeader from '@/app/components/PageHeader'
+import AnalysisContent from '@/app/lagou/analysis/AnalysisContent'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
+type Config = { id?: number; keywords: string; city: string; resumeType: 'ONLINE' | 'ATTACHMENT'; resumeName: string }
+type Option = { id?: number; code?: string; name: string }
+type Progress = { message?: string; current?: number; total?: number; success?: number; failed?: number; isRunning?: boolean }
+
+const parseKeywords = (value: unknown) => { if (Array.isArray(value)) return value.filter(Boolean).join(', '); const text = String(value || '').trim(); if (text.startsWith('[')) { try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) return parsed.filter(Boolean).join(', ') } catch {} } return text.replace(/，/g, ',') }
+const serializeKeywords = (value: string) => JSON.stringify(value.replace(/，/g, ',').split(',').map((item) => item.trim()).filter(Boolean))
 
 export default function LagouPage() {
-  const [loggedIn, setLoggedIn] = useState(false)
-  const [message, setMessage] = useState('检查登录状态中...')
-
-  const refresh = async () => {
-    const response = await apiFetch('/api/lagou/login-status')
-    const data = await response.json()
-    setLoggedIn(Boolean(data.isLoggedIn))
-    setMessage(data.isLoggedIn ? '拉勾已登录' : '请先登录拉勾')
-  }
-
-  useEffect(() => {
-    const initial = window.setTimeout(() => {
-      void refresh().catch(() => setMessage('服务连接失败'))
-    }, 0)
-    const timer = window.setInterval(() => void refresh().catch(() => undefined), 2000)
-    return () => {
-      window.clearTimeout(initial)
-      window.clearInterval(timer)
-    }
-  }, [])
-
-  const call = async (path: string) => {
-    const response = await apiFetch(`/api/lagou/${path}`, { method: 'POST' })
-    const data = await response.json()
-    setMessage(data.message || '操作完成')
-    await refresh()
-  }
-
-  return (
-    <main className="p-8">
-      <h1 className="text-2xl font-bold">拉勾</h1>
-      <p className="mt-2 text-muted-foreground">{message}</p>
-      <div className="mt-6 flex gap-3">
-        <button className="rounded bg-primary px-4 py-2 text-white" onClick={() => call('login')}>
-          打开登录页
-        </button>
-        {loggedIn && (
-          <button className="rounded border px-4 py-2" onClick={() => call('logout')}>
-            退出登录
-          </button>
-        )}
-      </div>
-      <p className="mt-6 text-sm text-muted-foreground">
-        登录成功后 Cookie 会自动保存，后续再接入拉勾岗位搜索和投递。
-      </p>
-    </main>
-  )
+  const [config, setConfig] = useState<Config>({ keywords: '', city: '全国', resumeType: 'ONLINE', resumeName: '' })
+  const [cities, setCities] = useState<Option[]>([])
+  const [loading, setLoading] = useState(true)
+  const [checkingLogin, setCheckingLogin] = useState(true)
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [isRunning, setIsRunning] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
+  const [progress, setProgress] = useState<Progress | null>(null)
+  const [notice, setNotice] = useState('')
+  const loadConfig = async () => { try { const response = await apiFetch('/api/lagou/config'); const data = await response.json(); if (data.config) setConfig((current) => ({ ...current, ...data.config, keywords: parseKeywords(data.config.keywords), city: data.config.city || '全国', resumeType: data.config.resumeType || 'ONLINE' })); setCities(data.options?.city || []) } catch { setNotice('配置加载失败，请检查后端服务') } finally { setLoading(false) } }
+  useEffect(() => { void loadConfig() }, [])
+  useEffect(() => { if (typeof EventSource === 'undefined') { setCheckingLogin(false); return }; const client = createSSEWithBackoff(`${API_BASE_URL}/api/jobs/login-status/stream`, { onError: () => setCheckingLogin(false), listeners: [{ name: 'connected', handler: (event) => { try { const data = JSON.parse(event.data); setIsLoggedIn(Boolean(data.lagouLoggedIn)); setCheckingLogin(false) } catch {} } }, { name: 'login-status', handler: (event) => { try { const data = JSON.parse(event.data); if (data.platform === 'lagou') { setIsLoggedIn(Boolean(data.isLoggedIn)); setCheckingLogin(false) } } catch {} } }, { name: 'ping', handler: () => {} }] }); return () => client.close() }, [])
+  useEffect(() => { let cancelled = false; const poll = async () => { try { const response = await apiFetch('/api/lagou/status', { cache: 'no-store' }); if (!response.ok) return; const data = await response.json(); if (!cancelled) { setIsRunning(Boolean(data.isRunning)); if (typeof data.isLoggedIn === 'boolean') setIsLoggedIn(data.isLoggedIn); if (!data.isRunning) setIsStopping(false) } } catch {} }; void poll(); const timer = window.setInterval(poll, 1500); return () => { cancelled = true; window.clearInterval(timer) } }, [])
+  useEffect(() => { if (typeof EventSource === 'undefined') return; const client = createSSEWithBackoff(`${API_BASE_URL}/api/lagou/stream`, { onError: () => {}, listeners: [{ name: 'progress', handler: (event) => { try { const data = JSON.parse(event.data); setProgress(data); if (typeof data.isRunning === 'boolean') setIsRunning(data.isRunning) } catch {} } }, { name: 'message', handler: (event) => { try { setProgress(JSON.parse(event.data)) } catch {} } }, { name: 'ping', handler: () => {} }] }); return () => client.close() }, [])
+  const action = async (path: string) => { try { const response = await apiFetch(`/api/lagou/${path}`, { method: 'POST' }); const data = await response.json(); setNotice(data.message || (data.success ? '操作成功' : '操作失败')); if (path === 'login') setCheckingLogin(true); if (path === 'logout') setIsLoggedIn(false) } catch { setNotice('网络或服务异常') } }
+  const save = async () => { if (config.resumeType === 'ATTACHMENT' && !config.resumeName.trim()) { setNotice('附件简历模式必须填写简历名称'); return }; try { const response = await apiFetch('/api/lagou/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...config, keywords: serializeKeywords(config.keywords) }) }); setNotice(response.ok ? '配置保存成功' : '配置保存失败') } catch { setNotice('配置保存失败') } }
+  const start = async () => { setIsRunning(true); await action('start') }
+  const stop = async () => { setIsStopping(true); await action('stop') }
+  return <div className="space-y-6"><PageHeader icon={<BiBriefcase className="text-2xl" />} title="拉勾配置" subtitle="配置拉勾平台的求职参数" iconClass="text-white" accentBgClass="bg-orange-500" actions={<div className="flex items-center gap-2">{isRunning ? <Button onClick={stop} disabled={isStopping} size="sm" className="rounded-full bg-red-500 text-white"><BiStop className="mr-1" />{isStopping ? '正在停止...' : '正在投递，点击停止'}</Button> : <Button onClick={start} disabled={checkingLogin || !isLoggedIn} size="sm" className="rounded-full bg-teal-500 text-white"><BiPlay className="mr-1" />{checkingLogin ? '检查登录中...' : !isLoggedIn ? '请先登录拉勾' : '开始投递'}</Button>}<Button onClick={() => action('login')} size="sm" className="rounded-full bg-blue-500 text-white"><BiLogIn className="mr-1" />打开登录</Button><Button onClick={() => action('logout')} size="sm" className="rounded-full bg-red-500 text-white"><BiLogOut className="mr-1" />退出登录</Button><Button onClick={save} size="sm" className="rounded-full bg-indigo-500 text-white"><BiSave className="mr-1" />保存配置</Button></div>} />{notice && <p className="text-sm text-muted-foreground">{notice}</p>}{progress && (isRunning || progress.message) && <Card><CardContent className="pt-5"><p className="text-sm">{progress.message || '投递进行中'}</p><p className="mt-1 text-xs text-muted-foreground">进度：{progress.current || 0}/{progress.total || 0}，成功 {progress.success || 0}，失败 {progress.failed || 0}</p></CardContent></Card>}<Tabs defaultValue="config" className="w-full"><TabsList className="grid w-full grid-cols-2"><TabsTrigger value="config">平台配置</TabsTrigger><TabsTrigger value="analytics">投递分析</TabsTrigger></TabsList><TabsContent value="config" className="mt-6 space-y-6"><Card><CardHeader><CardTitle>拉勾平台说明</CardTitle><CardDescription>登录后即可按配置启动自动投递</CardDescription></CardHeader><CardContent><p className="text-sm text-muted-foreground">当前状态：{checkingLogin ? '检查中' : isLoggedIn ? '已登录' : '未登录'}。投递进度会通过实时通道更新，连接中断时状态接口会继续轮询。</p></CardContent></Card><Card><CardHeader><CardTitle>配置参数</CardTitle></CardHeader><CardContent>{loading ? <p className="text-sm text-muted-foreground">配置加载中...</p> : <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="space-y-2"><Label htmlFor="keywords">搜索关键词（逗号分隔）</Label><Input id="keywords" value={config.keywords} onChange={(e) => setConfig({ ...config, keywords: e.target.value })} placeholder="如：Java，后端，Spring" /></div><div className="space-y-2"><Label htmlFor="city">城市</Label><Select id="city" value={config.city || '全国'} onChange={(e) => setConfig({ ...config, city: e.target.value })}><option value="全国">全国</option>{cities.map((city) => <option key={city.id || city.code || city.name} value={city.name}>{city.name}</option>)}</Select></div><div className="space-y-2"><Label>简历类型</Label><div className="flex gap-5 pt-2"><label className="flex items-center gap-2 text-sm"><input type="radio" checked={config.resumeType === 'ONLINE'} onChange={() => setConfig({ ...config, resumeType: 'ONLINE' })} />在线简历</label><label className="flex items-center gap-2 text-sm"><input type="radio" checked={config.resumeType === 'ATTACHMENT'} onChange={() => setConfig({ ...config, resumeType: 'ATTACHMENT' })} />附件简历</label></div></div>{config.resumeType === 'ATTACHMENT' && <div className="space-y-2"><Label htmlFor="resumeName">附件简历名称</Label><Input id="resumeName" required value={config.resumeName} onChange={(e) => setConfig({ ...config, resumeName: e.target.value })} placeholder="请输入已上传的简历名称" /></div>}</div>}</CardContent></Card></TabsContent><TabsContent value="analytics" className="mt-6"><AnalysisContent /></TabsContent></Tabs></div>
 }
