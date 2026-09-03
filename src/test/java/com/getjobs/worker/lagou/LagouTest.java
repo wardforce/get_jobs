@@ -17,6 +17,12 @@ class LagouTest {
     }
 
     @Test
+    void trimsAndDeduplicatesKeywordsPreservingOrder() {
+        assertEquals(List.of("Java", "Python"),
+                Lagou.parseKeywords(" Java, Java，Python, Java "));
+    }
+
+    @Test
     void buildsPagedNationwideSearchUrlWithoutCityParameter() {
         assertEquals("https://www.lagou.com/wn/jobs?kd=Java&pn=3",
                 Lagou.buildSearchUrl("Java", "全国", 3));
@@ -51,5 +57,13 @@ class LagouTest {
 
         assertEquals(Optional.of("Java简历"), Lagou.selectResume(resumes, "Java简历"));
         assertEquals(Optional.empty(), Lagou.selectResume(resumes, "不存在的简历"));
+        assertEquals(Optional.of("附件简历：Java简历"), Lagou.selectResume(List.of("附件简历：Java简历"), "Java简历"));
+    }
+
+    @Test
+    void recognizesDisabledPaginationControls() {
+        assertFalse(Lagou.isPaginationEnabled("lg-pagination-item-link disabled", null));
+        assertFalse(Lagou.isPaginationEnabled("lg-pagination-item-link", "true"));
+        assertTrue(Lagou.isPaginationEnabled("lg-pagination-item-link", "false"));
     }
 }

@@ -5,6 +5,7 @@ import com.getjobs.worker.dto.JobProgressMessage;
 import com.getjobs.worker.lagou.Lagou;
 import com.getjobs.worker.lagou.LagouConfig;
 import com.getjobs.worker.manager.PlaywrightManager;
+import com.getjobs.worker.utils.DeliveryLimit;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -67,7 +68,9 @@ public class LagouJobService extends InterruptibleJobPlatformService {
         Map<String, Object> status = new HashMap<>();
         status.put("platform", PLATFORM); status.put("isRunning", isRunning());
         status.put("isLoggedIn", playwrightManager.isLoggedIn(PLATFORM));
-        status.putAll(playwrightManager.getLagouPageStatus());
+        status.put("maxDeliveryAttempts", DeliveryLimit.configuredMax());
+        try { status.putAll(playwrightManager.getLagouPageStatus()); }
+        catch (Exception e) { status.put("pageState", "MISSING"); status.put("pageMessage", e.getMessage()); }
         return status;
     }
 

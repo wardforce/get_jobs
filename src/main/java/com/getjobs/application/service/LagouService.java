@@ -39,7 +39,8 @@ public class LagouService {
         }
         config.setKeywords(Lagou.parseKeywords(entity.getKeywords()));
         config.setCity(entity.getCity() == null || entity.getCity().isBlank() ? "全国" : entity.getCity().trim());
-        config.setResumeType(entity.getResumeType());
+        config.setResumeType(entity.getResumeType() == null || entity.getResumeType().isBlank()
+                ? "ONLINE" : entity.getResumeType().trim().toUpperCase());
         config.setResumeName(entity.getResumeName());
         return config;
     }
@@ -96,16 +97,19 @@ public class LagouService {
 
     public StatsResponse getLagouStats(List<String> statuses, String location, String experience, String degree,
                                        Double minK, Double maxK, String keyword) {
-        List<LagouJobDataEntity> jobs = filteredJobs(statuses, location, experience, degree, keyword);
+        List<LagouJobDataEntity> jobs = filteredJobs(statuses, location, experience, degree, minK, maxK, keyword);
         StatsResponse result = new StatsResponse();
         result.kpi = new Kpi();
         result.kpi.total = jobs.size();
         result.kpi.delivered = jobs.stream().filter(j -> "已投递".equals(j.getDeliveryStatus())).count();
         result.kpi.pending = jobs.stream().filter(j -> "未投递".equals(j.getDeliveryStatus())).count();
+        result.kpi.failed = jobs.stream().filter(j -> "投递失败".equals(j.getDeliveryStatus())).count();
+        result.kpi.filtered = jobs.stream().filter(j -> "已过滤".equals(j.getDeliveryStatus())).count();
         result.charts = new Charts();
         result.charts.byStatus = group(jobs, LagouJobDataEntity::getDeliveryStatus);
         result.charts.byCity = group(jobs, LagouJobDataEntity::getLocation);
         result.charts.byCompany = group(jobs, LagouJobDataEntity::getCompanyName);
+        result.charts.byIndustry = group(jobs, LagouJobDataEntity::getIndustry);
         result.charts.byExperience = group(jobs, LagouJobDataEntity::getExperience);
         result.charts.byDegree = group(jobs, LagouJobDataEntity::getDegree);
         result.charts.salaryBuckets = salaryBuckets(jobs);
@@ -116,7 +120,7 @@ public class LagouService {
     public PagedResult listLagouJobs(List<String> statuses, String location, String experience, String degree,
                                      Double minK, Double maxK, String keyword, int page, int size) {
         page = Math.max(1, page); size = Math.max(1, size);
-        List<LagouJobDataEntity> jobs = filteredJobs(statuses, location, experience, degree, keyword);
+        List<LagouJobDataEntity> jobs = filteredJobs(statuses, location, experience, degree, minK, maxK, keyword);
         int from = Math.min(jobs.size(), (page - 1) * size);
         PagedResult result = new PagedResult();
         result.items = jobs.subList(from, Math.min(jobs.size(), from + size));
@@ -125,7 +129,7 @@ public class LagouService {
     }
 
     private List<LagouJobDataEntity> filteredJobs(List<String> statuses, String location, String experience,
-                                                   String degree, String keyword) {
+                                                   String degree, Double minK, Double maxK, String keyword) {
         QueryWrapper<LagouJobDataEntity> query = new QueryWrapper<>();
         if (statuses != null && !statuses.isEmpty()) query.in("delivery_status", statuses.stream()
                 .filter(Objects::nonNull).map(String::trim).collect(Collectors.toSet()));
@@ -135,7 +139,27 @@ public class LagouService {
         if (keyword != null && !keyword.isBlank()) query.and(q -> q.like("job_title", keyword.trim())
                 .or().like("company_name", keyword.trim()));
         query.orderByDesc("create_time");
-        return lagouJobDataMapper.selectList(query);
+        List<LagouJobDataEntity> result = lagouJobDataMapper.selectList(query);
+        if (minK == null && maxK == null) return result;
+        return result.stream().filter(job -> {
+            Double median = parseSalaryMedianK(job.getSalary());
+            if (median == null) return false;
+            return (minK == null || median >= minK) && (maxK == null || median <= maxK);
+        }).toList();
+    }
+
+    static Double parseSalaryMedianK(String salary) {
+        if (salary == null || salary.isBlank() || salary.contains("面议")) return null;
+        String normalized = salary.replaceAll("(?i)\\d+\\s*薪", "");
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(\\d+(?:\\.\\d+)?)").matcher(normalized);
+        List<Double> values = new ArrayList<>();
+        while (matcher.find() && values.size() < 2) values.add(Double.parseDouble(matcher.group(1)));
+        if (values.isEmpty()) return null;
+        if (salary.contains("元") && values.stream().anyMatch(v -> v > 1000)) {
+            values = values.stream().map(v -> v / 1000d).toList();
+        }
+        return values.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
     }
 
     private static List<NameValue> group(List<LagouJobDataEntity> jobs,
@@ -145,9 +169,20 @@ public class LagouService {
         }, Collectors.counting())).entrySet().stream().map(e -> new NameValue(e.getKey(), e.getValue())).toList();
     }
 
-    private static List<NameValue> salaryBuckets(List<LagouJobDataEntity> jobs) {
-        return List.of(new NameValue("有薪资", jobs.stream().filter(j -> j.getSalary() != null && !j.getSalary().isBlank()).count()),
-                new NameValue("面议或未知", jobs.stream().filter(j -> j.getSalary() == null || j.getSalary().isBlank()).count()));
+    private static List<BucketValue> salaryBuckets(List<LagouJobDataEntity> jobs) {
+        long zeroToTen = 0, tenToFifteen = 0, fifteenToTwenty = 0, twentyToThirty = 0, thirtyPlus = 0, unknown = 0;
+        for (LagouJobDataEntity job : jobs) {
+            Double median = parseSalaryMedianK(job.getSalary());
+            if (median == null) { unknown++; continue; }
+            if (median < 10) zeroToTen++;
+            else if (median < 15) tenToFifteen++;
+            else if (median < 20) fifteenToTwenty++;
+            else if (median < 30) twentyToThirty++;
+            else thirtyPlus++;
+        }
+        return List.of(new BucketValue("0-10K", zeroToTen), new BucketValue("10-15K", tenToFifteen),
+                new BucketValue("15-20K", fifteenToTwenty), new BucketValue("20-30K", twentyToThirty),
+                new BucketValue(">=30K", thirtyPlus), new BucketValue("面议或未知", unknown));
     }
 
     private static List<NameValue> dailyTrend(List<LagouJobDataEntity> jobs) {
@@ -156,9 +191,10 @@ public class LagouService {
                 .map(e -> new NameValue(e.getKey(), e.getValue())).toList();
     }
 
-    public static class Kpi { public long total; public long delivered; public long pending; }
+    public static class Kpi { public long total; public long delivered; public long pending; public long filtered; public long failed; }
     public static class NameValue { public String name; public long value; public NameValue(String name, long value) { this.name = name; this.value = value; } }
-    public static class Charts { public List<NameValue> byStatus = new ArrayList<>(); public List<NameValue> byCity = new ArrayList<>(); public List<NameValue> byCompany = new ArrayList<>(); public List<NameValue> byExperience = new ArrayList<>(); public List<NameValue> byDegree = new ArrayList<>(); public List<NameValue> salaryBuckets = new ArrayList<>(); public List<NameValue> dailyTrend = new ArrayList<>(); }
+    public static class BucketValue { public String bucket; public long value; public BucketValue(String bucket, long value) { this.bucket = bucket; this.value = value; } }
+    public static class Charts { public List<NameValue> byStatus = new ArrayList<>(); public List<NameValue> byCity = new ArrayList<>(); public List<NameValue> byIndustry = new ArrayList<>(); public List<NameValue> byCompany = new ArrayList<>(); public List<NameValue> byExperience = new ArrayList<>(); public List<NameValue> byDegree = new ArrayList<>(); public List<BucketValue> salaryBuckets = new ArrayList<>(); public List<NameValue> dailyTrend = new ArrayList<>(); }
     public static class StatsResponse { public Kpi kpi; public Charts charts; }
     public static class PagedResult { public List<LagouJobDataEntity> items; public long total; public int page; public int size; }
 }

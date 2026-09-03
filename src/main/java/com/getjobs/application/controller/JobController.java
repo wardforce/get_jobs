@@ -112,12 +112,14 @@ public class JobController {
             boolean liepinLoggedIn = playwrightManager.isLoggedIn("liepin");
             boolean job51LoggedIn = playwrightManager.isLoggedIn("51job");
             boolean zhilianLoggedIn = playwrightManager.isLoggedIn("zhilian");
+            boolean lagouLoggedIn = playwrightManager.isLoggedIn("lagou");
             Map<String, Object> connectedStatus = new HashMap<>();
             connectedStatus.put("message", "已连接到登录状态推送");
             connectedStatus.put("bossLoggedIn", bossLoggedIn);
             connectedStatus.put("liepinLoggedIn", liepinLoggedIn);
             connectedStatus.put("job51LoggedIn", job51LoggedIn);
             connectedStatus.put("zhilianLoggedIn", zhilianLoggedIn);
+            connectedStatus.put("lagouLoggedIn", lagouLoggedIn);
             connectedStatus.putAll(playwrightManager.getLiepinSessionStatus());
             connectedStatus.putAll(playwrightManager.getZhilianSessionStatus());
 
