@@ -54,6 +54,10 @@ INSERT INTO zhilian_config (keywords, city_code, salary)
 SELECT '["大模型","Java","Python","Golang"]', '538', '35000,50000'
 WHERE NOT EXISTS (SELECT 1 FROM zhilian_config);
 
+INSERT INTO lagou_config (keywords, city, resume_type, resume_name)
+SELECT '["大模型","Java","Python","Golang"]', '全国', 'ONLINE', ''
+WHERE NOT EXISTS (SELECT 1 FROM lagou_config);
+
 WITH seed(type, name, code, sort_order) AS (
 VALUES
     ('city', '不限', '0', 0),
@@ -765,5 +769,28 @@ SELECT seed.type, seed.name, seed.code, seed.sort_order
 FROM seed
 WHERE NOT EXISTS (
     SELECT 1 FROM zhilian_option existing
+    WHERE existing.type = seed.type AND existing.code = seed.code
+);
+
+WITH seed(type, name, code, sort_order) AS (
+VALUES
+    ('city', '全国', '全国', 0), ('city', '北京', '北京', 1), ('city', '上海', '上海', 2),
+    ('city', '广州', '广州', 3), ('city', '深圳', '深圳', 4), ('city', '杭州', '杭州', 5),
+    ('city', '成都', '成都', 6), ('city', '武汉', '武汉', 7), ('city', '南京', '南京', 8),
+    ('city', '苏州', '苏州', 9), ('city', '西安', '西安', 10), ('city', '重庆', '重庆', 11),
+    ('city', '天津', '天津', 12), ('city', '郑州', '郑州', 13), ('city', '长沙', '长沙', 14),
+    ('city', '厦门', '厦门', 15), ('city', '济南', '济南', 16), ('city', '青岛', '青岛', 17),
+    ('city', '合肥', '合肥', 18), ('city', '宁波', '宁波', 19), ('city', '东莞', '东莞', 20),
+    ('city', '佛山', '佛山', 21), ('city', '福州', '福州', 22), ('city', '昆明', '昆明', 23),
+    ('city', '沈阳', '沈阳', 24), ('city', '大连', '大连', 25), ('city', '哈尔滨', '哈尔滨', 26),
+    ('city', '长春', '长春', 27), ('city', '南宁', '南宁', 28), ('city', '贵阳', '贵阳', 29),
+    ('city', '乌鲁木齐', '乌鲁木齐', 30), ('city', '兰州', '兰州', 31), ('city', '太原', '太原', 32),
+    ('city', '石家庄', '石家庄', 33), ('city', '南昌', '南昌', 34), ('city', '海口', '海口', 35)
+)
+INSERT INTO lagou_option (type, name, code, sort_order)
+SELECT seed.type, seed.name, seed.code, seed.sort_order
+FROM seed
+WHERE NOT EXISTS (
+    SELECT 1 FROM lagou_option existing
     WHERE existing.type = seed.type AND existing.code = seed.code
 );

@@ -228,3 +228,45 @@ CREATE TABLE IF NOT EXISTS zhilian_data (
     create_time DATETIME,
     update_time DATETIME
 );
+
+CREATE TABLE IF NOT EXISTS lagou_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keywords VARCHAR(500),
+    city VARCHAR(100),
+    resume_type VARCHAR(20) DEFAULT 'ONLINE',
+    resume_name VARCHAR(200),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_lagou_config_created ON lagou_config(created_at);
+CREATE INDEX IF NOT EXISTS idx_lagou_config_updated ON lagou_config(updated_at);
+
+CREATE TABLE IF NOT EXISTS lagou_option (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type VARCHAR(50) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    code VARCHAR(100) NOT NULL,
+    sort_order INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lagou_option_type_code ON lagou_option(type, code);
+
+CREATE TABLE IF NOT EXISTS lagou_data (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id VARCHAR(64) NOT NULL UNIQUE,
+    job_title VARCHAR(200),
+    job_link VARCHAR(300),
+    salary VARCHAR(100),
+    location VARCHAR(100),
+    experience VARCHAR(100),
+    degree VARCHAR(100),
+    company_name VARCHAR(200),
+    industry VARCHAR(100),
+    company_scale VARCHAR(100),
+    delivery_status VARCHAR(20) DEFAULT '未投递',
+    create_time DATETIME,
+    update_time DATETIME
+);

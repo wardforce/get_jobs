@@ -8,10 +8,12 @@ import com.getjobs.application.service.LiepinService;
 import com.getjobs.application.service.BossService;
 import com.getjobs.application.service.ZhilianService;
 import com.getjobs.application.service.Job51Service;
+import com.getjobs.application.service.LagouService;
 import com.getjobs.worker.boss.BossConfig;
 import com.getjobs.worker.job51.Job51Config;
 import com.getjobs.worker.liepin.LiepinConfig;
 import com.getjobs.worker.zhilian.ZhilianConfig;
+import com.getjobs.worker.lagou.LagouConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,6 +36,7 @@ public class ConfigService {
     private final BossService bossService;
     private final ZhilianService zhilianService;
     private final Job51Service job51Service;
+    private final LagouService lagouService;
 
     /**
      * 获取所有配置（以Map形式返回）
@@ -267,5 +270,10 @@ public class ConfigService {
      */
     public Job51Config getJob51Config() {
         return job51Service.loadJob51Config();
+    }
+
+    /** 统一入口：从专表 lagou_config 读取并构建 LagouConfig。 */
+    public LagouConfig getLagouConfig() {
+        return lagouService.loadLagouConfig();
     }
 }
