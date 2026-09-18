@@ -13,4 +13,6 @@ public class LagouConfig {
     private String resumeType;
     /** ATTACHMENT 模式下已锁定的附件简历名称。 */
     private String resumeName;
+    /** 单次最大投递职位数量（仅计成功新投递），默认 30。 */
+    private Integer maxCount = 30;
 }

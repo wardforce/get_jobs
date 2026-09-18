@@ -91,4 +91,38 @@ class DatabaseSeedInitializationTest {
             assertEquals(5, prompt.split("%s", -1).length - 1);
         }
     }
+
+    @Test
+    void upgradesLegacyLagouConfigTableWithoutFailure() throws Exception {
+        String dbUrl = "jdbc:sqlite:file:memdb_legacy_" + System.nanoTime() + "?mode=memory&cache=shared";
+        try (Connection keepAlive = DriverManager.getConnection(dbUrl)) {
+            ScriptUtils.executeSqlScript(keepAlive, resource("schema.sql"));
+            try (Statement statement = keepAlive.createStatement()) {
+                statement.execute("DROP TABLE lagou_config");
+                statement.execute("CREATE TABLE lagou_config (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                        "keywords VARCHAR(500), " +
+                        "city VARCHAR(100), " +
+                        "resume_type VARCHAR(20) DEFAULT 'ONLINE', " +
+                        "resume_name VARCHAR(200), " +
+                        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, " +
+                        "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+            }
+
+            org.sqlite.SQLiteDataSource ds = new org.sqlite.SQLiteDataSource();
+            ds.setUrl(dbUrl);
+
+            com.getjobs.application.init.DatabaseSchemaInitializer initializer =
+                    new com.getjobs.application.init.DatabaseSchemaInitializer();
+            initializer.postProcessAfterInitialization(ds, "dataSource");
+
+            ScriptUtils.executeSqlScript(keepAlive, resource("data.sql"));
+
+            try (Statement statement = keepAlive.createStatement();
+                 ResultSet rs = statement.executeQuery("SELECT max_count FROM lagou_config LIMIT 1")) {
+                assertTrue(rs.next());
+                assertEquals(30, rs.getInt("max_count"));
+            }
+        }
+    }
 }

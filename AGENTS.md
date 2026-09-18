@@ -28,9 +28,14 @@ pnpm lint                 # Run ESLint
 pnpm build                # Create a production build
 ```
 
-The backend initializes missing SQLite tables and default configuration from `schema.sql` and `data.sql` on startup. The API listens on port `8888` by default, and logs are written to `target/logs/get-jobs.log`.
+The backend initializes missing SQLite tables and default configuration from `schema.sql` and `data.sql` on startup. The API listens on port `8889` by default, and logs are written to `target/logs/get-jobs.log`.
 
 Playwright uses `db/playwright-profile` for persistent cookies and browser state by default. Set `GET_JOBS_BROWSER_PROFILE_DIR` when an isolated profile is needed for tests or local debugging.
+
+## Shell & Scripting Environment
+
+- **Shell**: PowerShell 7 (`pwsh`) is installed. Agents should use PowerShell 7 for all shell executions and commands (avoid legacy Windows PowerShell 5.1 or CMD).
+- **Scripting Languages**: Both Python (`python`) and JavaScript / Node.js (`node`) are installed and configured. Agents are permitted and encouraged to write and run scripts in Python or JavaScript/Node.js for auxiliary tasks, automation, or data processing.
 
 ## Coding Style & Naming
 

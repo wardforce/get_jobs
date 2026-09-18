@@ -48,6 +48,10 @@ public class JobProgressMessage {
     /**
      * 创建进度消息
      */
+    public static JobProgressMessage progress(String platform, String message, Integer current, Integer total) {
+        return new JobProgressMessage(platform, "progress", message, current, total, System.currentTimeMillis(), null);
+    }
+
     public static JobProgressMessage progress(String platform, String message, int current, int total) {
         return new JobProgressMessage(platform, "progress", message, current, total, System.currentTimeMillis(), null);
     }

@@ -22,6 +22,7 @@ type StatsResponse = {
     pending: number
     filtered: number
     failed: number
+    uncertain?: number
     avgMonthlyK?: number | null
   }
   charts: {
@@ -101,7 +102,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
   const [detailJob, setDetailJob] = useState<LagouJob | null>(null)
   const [computedSalaryBuckets, setComputedSalaryBuckets] = useState<BucketValue[]>([])
 
-  const statusOptions = ["未投递", "已投递"]
+  const statusOptions = ["未投递", "已投递", "投递失败", "待确认", "已过滤"]
 
   useEffect(() => {
     loadStats()
@@ -224,7 +225,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         it.experience || "",
         it.degree || "",
         "",
-        (it.deliveryStatus === "已投递" ? "已投递" : "未投递"),
+        (it.deliveryStatus || "未投递"),
         it.jobLink || "",
         it.createTime || "",
       ])
@@ -319,6 +320,8 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
     const v = (value || "").trim()
     if (kind === "delivery") {
       if (v.includes("已投递")) return `${base} bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300`
+      if (v === "待确认") return `${base} bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300`
+      if (v === "投递失败") return `${base} bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300`
       return `${base} bg-slate-100 text-slate-700 dark:bg-slate-800/50 dark:text-slate-300`
     }
     return `${base} bg-gray-100 text-gray-700 dark:bg-gray-700/50 dark:text-gray-200`
@@ -343,6 +346,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       { title: "已投递", value: k?.delivered ?? 0 },
       { title: "未投递", value: k?.pending ?? 0 },
       { title: "平均月薪(K)", value: (k?.avgMonthlyK ?? avgMonthlyKFromItems ?? 0) },
+      { title: "待确认", value: k?.uncertain ?? 0 },
     ]
   }, [stats, items])
 
@@ -568,7 +572,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         <Card>
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2"><BiPieChart className="text-primary" />按状态</CardTitle>
-            <CardDescription>已投递与未投递占比</CardDescription>
+            <CardDescription>各投递状态占比；待确认岗位需核对平台投递记录</CardDescription>
           </CardHeader>
           <CardContent>
             <ChartCanvas type="pie" title="按状态" labels={(stats?.charts?.byStatus || []).map(x => x.name)} data={(stats?.charts?.byStatus || []).map(x => x.value)} colors={["#10b981", "#64748b"]} />
@@ -646,7 +650,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
                     <td className="py-2 px-3 whitespace-nowrap">{it.degree || ""}</td>
                     <td className="py-2 px-3 whitespace-nowrap">{""}</td>
                     <td className="py-2 px-3 whitespace-nowrap">
-                      <span className={badgeClass("delivery", it.deliveryStatus === "已投递" ? "已投递" : "未投递")}>{it.deliveryStatus === "已投递" ? "已投递" : "未投递"}</span>
+                      <span className={badgeClass("delivery", it.deliveryStatus)}>{it.deliveryStatus || "未投递"}</span>
                     </td>
                     <td className="py-2 px-3 whitespace-nowrap">
                       {it.jobLink ? (
@@ -679,7 +683,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
                   <div><span className="text-muted-foreground">经验：</span>{detailJob.experience || ""}</div>
                   <div><span className="text-muted-foreground">学历：</span>{detailJob.degree || ""}</div>
                   <div><span className="text-muted-foreground">联系人：</span>{""}</div>
-                  <div><span className="text-muted-foreground">状态：</span>{detailJob.deliveryStatus === "已投递" ? "已投递" : "未投递"}</div>
+                  <div><span className="text-muted-foreground">状态：</span>{detailJob.deliveryStatus || "未投递"}</div>
                   <div><span className="text-muted-foreground">创建时间：</span>{formatDateOnly(detailJob.createTime)}</div>
                 </div>
                 <div className="mt-4">

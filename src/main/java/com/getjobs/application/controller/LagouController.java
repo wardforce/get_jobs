@@ -79,6 +79,7 @@ public class LagouController {
         if (config == null) config = new LagouConfigEntity();
         if (config.getCity() == null || config.getCity().isBlank()) config.setCity("全国");
         if (config.getResumeType() == null || config.getResumeType().isBlank()) config.setResumeType("ONLINE");
+        if (config.getMaxCount() == null || config.getMaxCount() <= 0) config.setMaxCount(30);
         result.put("config", config);
         result.put("options", Map.of("city", lagouService.getOptionsByType("city")));
         return result;
@@ -213,6 +214,7 @@ public class LagouController {
         config.setResumeType(config.getResumeType().toUpperCase());
         if ("ATTACHMENT".equals(config.getResumeType()) && (config.getResumeName() == null || config.getResumeName().isBlank())) throw new IllegalArgumentException("附件简历模式必须填写简历名称");
         if (config.getResumeName() != null) config.setResumeName(config.getResumeName().trim());
+        if (config.getMaxCount() == null || config.getMaxCount() <= 0) config.setMaxCount(30);
     }
 
     private static List<String> parseStatuses(String statuses) {

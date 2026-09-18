@@ -10,20 +10,51 @@ import com.getjobs.application.mapper.LagouOptionMapper;
 import com.getjobs.worker.lagou.Lagou;
 import com.getjobs.worker.lagou.LagouConfig;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PostConstruct;
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class LagouService {
     private final LagouConfigMapper lagouConfigMapper;
     private final LagouOptionMapper lagouOptionMapper;
     private final LagouJobDataMapper lagouJobDataMapper;
+    private final DataSource dataSource;
+
+    @PostConstruct
+    public void ensureTableAndColumns() {
+        // ponytail: 自动为既有 SQLite 表补齐 max_count 列，无需复杂的外部迁移工具
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement()) {
+            boolean hasMaxCount = false;
+            try (ResultSet rs = stmt.executeQuery("PRAGMA table_info('lagou_config')")) {
+                while (rs.next()) {
+                    if ("max_count".equalsIgnoreCase(rs.getString("name"))) {
+                        hasMaxCount = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasMaxCount) {
+                stmt.execute("ALTER TABLE lagou_config ADD COLUMN max_count INTEGER DEFAULT 30");
+                log.info("已为 lagou_config 表补充 max_count 字段");
+            }
+        } catch (Exception e) {
+            log.warn("检查或升级 lagou_config 表结构失败: {}", e.getMessage());
+        }
+    }
 
     public LagouConfigEntity getFirstConfig() {
         return lagouConfigMapper.selectOne(new QueryWrapper<LagouConfigEntity>().last("LIMIT 1"));
@@ -35,6 +66,7 @@ public class LagouService {
         if (entity == null) {
             config.setKeywords(List.of());
             config.setCity("全国");
+            config.setMaxCount(30);
             return config;
         }
         config.setKeywords(Lagou.parseKeywords(entity.getKeywords()));
@@ -42,6 +74,7 @@ public class LagouService {
         config.setResumeType(entity.getResumeType() == null || entity.getResumeType().isBlank()
                 ? "ONLINE" : entity.getResumeType().trim().toUpperCase());
         config.setResumeName(entity.getResumeName());
+        config.setMaxCount(entity.getMaxCount() != null && entity.getMaxCount() > 0 ? entity.getMaxCount() : 30);
         return config;
     }
 
@@ -59,6 +92,7 @@ public class LagouService {
         if (first == null) {
             incoming.setCreatedAt(now);
             incoming.setUpdatedAt(now);
+            if (incoming.getMaxCount() == null || incoming.getMaxCount() <= 0) incoming.setMaxCount(30);
             lagouConfigMapper.insert(incoming);
             return getFirstConfig();
         }
@@ -68,6 +102,7 @@ public class LagouService {
         update.setCity(incoming.getCity() == null ? first.getCity() : incoming.getCity());
         update.setResumeType(incoming.getResumeType() == null ? first.getResumeType() : incoming.getResumeType());
         update.setResumeName(incoming.getResumeName() == null ? first.getResumeName() : incoming.getResumeName());
+        update.setMaxCount(incoming.getMaxCount() == null ? (first.getMaxCount() == null ? 30 : first.getMaxCount()) : incoming.getMaxCount());
         update.setCreatedAt(first.getCreatedAt());
         update.setUpdatedAt(now);
         lagouConfigMapper.updateById(update);
@@ -77,6 +112,13 @@ public class LagouService {
     public List<LagouOptionEntity> getOptionsByType(String type) {
         return lagouOptionMapper.selectList(new QueryWrapper<LagouOptionEntity>()
                 .eq("type", type).orderByAsc("sort_order"));
+    }
+
+    /** Preserve uncertain submissions across task restarts so they are not sent again automatically. */
+    public String getJobDeliveryStatus(String jobId) {
+        LagouJobDataEntity existing = lagouJobDataMapper.selectOne(new QueryWrapper<LagouJobDataEntity>()
+                .eq("job_id", jobId).last("LIMIT 1"));
+        return existing == null ? null : existing.getDeliveryStatus();
     }
 
     public void saveOrUpdateJob(LagouJobDataEntity job) {
@@ -104,6 +146,7 @@ public class LagouService {
         result.kpi.delivered = jobs.stream().filter(j -> "已投递".equals(j.getDeliveryStatus())).count();
         result.kpi.pending = jobs.stream().filter(j -> "未投递".equals(j.getDeliveryStatus())).count();
         result.kpi.failed = jobs.stream().filter(j -> "投递失败".equals(j.getDeliveryStatus())).count();
+        result.kpi.uncertain = jobs.stream().filter(j -> "待确认".equals(j.getDeliveryStatus())).count();
         result.kpi.filtered = jobs.stream().filter(j -> "已过滤".equals(j.getDeliveryStatus())).count();
         result.charts = new Charts();
         result.charts.byStatus = group(jobs, LagouJobDataEntity::getDeliveryStatus);
@@ -191,7 +234,7 @@ public class LagouService {
                 .map(e -> new NameValue(e.getKey(), e.getValue())).toList();
     }
 
-    public static class Kpi { public long total; public long delivered; public long pending; public long filtered; public long failed; }
+    public static class Kpi { public long total; public long delivered; public long pending; public long filtered; public long failed; public long uncertain; }
     public static class NameValue { public String name; public long value; public NameValue(String name, long value) { this.name = name; this.value = value; } }
     public static class BucketValue { public String bucket; public long value; public BucketValue(String bucket, long value) { this.bucket = bucket; this.value = value; } }
     public static class Charts { public List<NameValue> byStatus = new ArrayList<>(); public List<NameValue> byCity = new ArrayList<>(); public List<NameValue> byIndustry = new ArrayList<>(); public List<NameValue> byCompany = new ArrayList<>(); public List<NameValue> byExperience = new ArrayList<>(); public List<NameValue> byDegree = new ArrayList<>(); public List<BucketValue> salaryBuckets = new ArrayList<>(); public List<NameValue> dailyTrend = new ArrayList<>(); }

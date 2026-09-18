@@ -59,7 +59,7 @@ export default function ContentArea({ children }: { children: ReactNode }) {
       >
         {backendAvailable === false && (
           <div role="alert" className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-red-300/60 bg-red-50 px-4 py-3 text-sm text-red-800 shadow-sm">
-            <span>后端 8888 未连接，配置、投递和分析数据暂不可用。</span>
+            <span>后端 8889 未连接，配置、投递和分析数据暂不可用。</span>
             <button type="button" className="rounded-lg border border-red-300 px-3 py-1 font-medium hover:bg-red-100" onClick={() => setHealthRetry((value) => value + 1)}>
               重试
             </button>

@@ -47,20 +47,28 @@ public class LagouJobService extends InterruptibleJobPlatformService {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "请先配置拉勾搜索关键词"));
                 return;
             }
-            int delivered = playwrightManager.withDeliveryPage(PLATFORM, page -> {
+            Lagou.Result result = playwrightManager.withDeliveryPage(PLATFORM, page -> {
                 Lagou lagou = lagouProvider.getObject();
                 lagou.setPage(page);
                 lagou.setConfig(config);
                 lagou.setShouldStopCallback(this::shouldStop);
-                lagou.setProgressCallback((message, current, total) -> progressCallback.accept(
-                        current == null ? JobProgressMessage.info(PLATFORM, message)
-                                : JobProgressMessage.progress(PLATFORM, message, current, total)));
+                lagou.setProgressCallback((message, current, total) -> {
+                    if (current != null && total != null) {
+                        progressCallback.accept(JobProgressMessage.progress(PLATFORM, message, current, total));
+                    } else {
+                        progressCallback.accept(JobProgressMessage.info(PLATFORM, message));
+                    }
+                });
                 lagou.prepare();
                 return lagou.execute();
             });
-            progressCallback.accept(shouldStop()
-                    ? JobProgressMessage.warning(PLATFORM, "拉勾投递任务已停止")
-                    : JobProgressMessage.success(PLATFORM, String.format("投递任务完成，共投递%d个职位", delivered)));
+            progressCallback.accept(switch (result.state()) {
+                case ERROR, PENDING -> JobProgressMessage.error(PLATFORM, result.summary());
+                case STOPPED, LIMITED -> JobProgressMessage.warning(PLATFORM, result.summary());
+                case COMPLETED -> result.delivered() > 0 && result.failed() == 0
+                        ? JobProgressMessage.success(PLATFORM, result.summary())
+                        : JobProgressMessage.warning(PLATFORM, result.summary());
+            });
         } catch (Exception e) {
             log.error("拉勾投递任务执行失败", e);
             progressCallback.accept(shouldStop() ? JobProgressMessage.warning(PLATFORM, "拉勾投递任务已停止")

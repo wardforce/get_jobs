@@ -24,7 +24,8 @@ class LagouServiceTest {
     @Test
     void persistsCustomCityInFirstConfig() {
         LagouConfigMapper configMapper = mock(LagouConfigMapper.class);
-        LagouService service = new LagouService(configMapper, mock(LagouOptionMapper.class), mock(LagouJobDataMapper.class));
+        javax.sql.DataSource dataSource = mock(javax.sql.DataSource.class);
+        LagouService service = new LagouService(configMapper, mock(LagouOptionMapper.class), mock(LagouJobDataMapper.class), dataSource);
         LagouConfigEntity saved = new LagouConfigEntity();
         saved.setId(1L);
         when(configMapper.selectOne(any())).thenReturn(null).thenReturn(saved);
@@ -33,10 +34,12 @@ class LagouServiceTest {
         incoming.setKeywords("[\"Java\"]");
         incoming.setCity("珠海");
         incoming.setResumeType("ONLINE");
+        incoming.setMaxCount(50);
         service.saveOrUpdateFirstSelective(incoming);
 
         ArgumentCaptor<LagouConfigEntity> captor = ArgumentCaptor.forClass(LagouConfigEntity.class);
         verify(configMapper).insert(captor.capture());
         assertEquals("珠海", captor.getValue().getCity());
+        assertEquals(50, captor.getValue().getMaxCount());
     }
 }

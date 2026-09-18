@@ -15,6 +15,7 @@ public class LagouConfigEntity {
     private String city;
     private String resumeType;
     private String resumeName;
+    private Integer maxCount;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

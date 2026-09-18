@@ -11,6 +11,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LagouTest {
     @Test
+    void rejectsAmbiguousResumeNames() {
+        assertEquals(Optional.empty(), Lagou.selectResume(List.of("resume.pdf", "附件简历：resume.pdf"), "resume.pdf"));
+    }
+    @Test
     void parsesBracketedKeywordsAndChineseCommas() {
         assertEquals(List.of("Java", "大模型", "Python"),
                 Lagou.parseKeywords("[Java， 大模型, Python]"));
@@ -65,5 +69,44 @@ class LagouTest {
         assertFalse(Lagou.isPaginationEnabled("lg-pagination-item-link disabled", null));
         assertFalse(Lagou.isPaginationEnabled("lg-pagination-item-link", "true"));
         assertTrue(Lagou.isPaginationEnabled("lg-pagination-item-link", "false"));
+    }
+
+    @Test
+    void validatesMaxCountInConfig() {
+        LagouConfig config = new LagouConfig();
+        config.setKeywords(List.of("Java"));
+        config.setResumeType("ONLINE");
+        config.setMaxCount(10);
+        assertTrue(Lagou.isConfigValid(config));
+
+        config.setMaxCount(0);
+        assertFalse(Lagou.isConfigValid(config));
+
+        config.setMaxCount(-5);
+        assertFalse(Lagou.isConfigValid(config));
+    }
+
+    @Test
+    void validatesAttachmentModeConfig() {
+        LagouConfig config = new LagouConfig();
+        config.setKeywords(List.of("Java"));
+        config.setResumeType("ATTACHMENT");
+        config.setResumeName("my_resume.pdf");
+        assertTrue(Lagou.isConfigValid(config));
+
+        config.setResumeName("");
+        assertFalse(Lagou.isConfigValid(config));
+
+        config.setResumeName(null);
+        assertFalse(Lagou.isConfigValid(config));
+    }
+
+    @Test
+    void jobProgressMessageSupportsNullableCurrentAndTotal() {
+        com.getjobs.worker.dto.JobProgressMessage msg =
+                com.getjobs.worker.dto.JobProgressMessage.progress("lagou", "进度更新", 1, null);
+        assertEquals(1, msg.getCurrent());
+        org.junit.jupiter.api.Assertions.assertNull(msg.getTotal());
+        assertEquals("progress", msg.getType());
     }
 }

@@ -235,6 +235,7 @@ CREATE TABLE IF NOT EXISTS lagou_config (
     city VARCHAR(100),
     resume_type VARCHAR(20) DEFAULT 'ONLINE',
     resume_name VARCHAR(200),
+    max_count INTEGER DEFAULT 30,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

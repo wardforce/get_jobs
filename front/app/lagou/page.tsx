@@ -20,6 +20,7 @@ type Config = {
   city: string
   resumeType: 'ONLINE' | 'ATTACHMENT'
   resumeName: string
+  maxCount: number
 }
 type Option = { id?: number; code?: string; name: string }
 type StatusPayload = { isRunning?: boolean; isLoggedIn?: boolean; loginState?: LoginState; lagouLoginState?: LoginState; message?: string }
@@ -50,7 +51,7 @@ function stateFromPayload(data: StatusPayload): LoginState {
 }
 
 export default function LagouPage() {
-  const [config, setConfig] = useState<Config>({ keywords: '', city: '全国', resumeType: 'ONLINE', resumeName: '' })
+  const [config, setConfig] = useState<Config>({ keywords: '', city: '全国', resumeType: 'ONLINE', resumeName: '', maxCount: 30 })
   const [cities, setCities] = useState<Option[]>([])
   const [isCustomCity, setIsCustomCity] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -73,6 +74,7 @@ export default function LagouPage() {
           city: data.config.city || '全国',
           resumeType: data.config.resumeType || 'ONLINE',
           resumeName: data.config.resumeName || '',
+          maxCount: typeof data.config.maxCount === 'number' && data.config.maxCount > 0 ? data.config.maxCount : 30,
         }))
         setIsCustomCity(Boolean(data.config.city)
           && data.config.city !== '全国'
@@ -152,6 +154,7 @@ export default function LagouPage() {
   const save = async () => {
     if (!config.keywords.trim()) return setNotice('至少填写一个搜索关键词')
     if (config.resumeType === 'ATTACHMENT' && !config.resumeName.trim()) return setNotice('附件简历模式必须填写简历名称')
+    if (config.maxCount < 1) return setNotice('单次投递数量必须大于 0')
     try {
       const response = await apiFetch('/api/lagou/config', {
         method: 'PUT',
@@ -200,6 +203,7 @@ export default function LagouPage() {
           <Card><CardHeader><CardTitle>配置参数</CardTitle></CardHeader><CardContent>{loading ? <p className="text-sm text-muted-foreground">配置加载中...</p> : <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div className="space-y-2"><Label htmlFor="keywords">搜索关键词（逗号分隔）</Label><Input id="keywords" value={config.keywords} onChange={(e) => setConfig({ ...config, keywords: e.target.value })} placeholder="如：Java，后端，Spring" /><p className="text-xs text-muted-foreground">支持英文逗号和中文逗号。</p></div>
             <div className="space-y-2"><div className="flex items-center justify-between"><Label htmlFor="city">城市</Label><button type="button" className="text-xs text-primary hover:underline" onClick={() => { setIsCustomCity((value) => !value); if (!isCustomCity) setConfig({ ...config, city: '' }) }}>{isCustomCity ? '从列表选择' : '手动填写'}</button></div>{isCustomCity ? <Input id="city" value={config.city || ''} onChange={(e) => setConfig({ ...config, city: e.target.value })} placeholder="例如：珠海" /> : <Select id="city" value={config.city || '全国'} onChange={(e) => setConfig({ ...config, city: e.target.value })}><option value="全国">全国</option>{cities.map((city) => <option key={city.id || city.code || city.name} value={city.name}>{city.name}</option>)}</Select>}<p className="text-xs text-muted-foreground">支持列表城市，也支持直接填写城市名称；保存后写入数据库。</p></div>
+            <div className="space-y-2"><Label htmlFor="maxCount">单次投递数量</Label><Input id="maxCount" type="number" min={1} max={200} value={config.maxCount || 30} onChange={(e) => setConfig({ ...config, maxCount: Math.max(1, parseInt(e.target.value, 10) || 1) })} placeholder="30" /><p className="text-xs text-muted-foreground">达到该有效新投递数后自动完成本轮投递。</p></div>
             <fieldset className="space-y-2"><legend className="text-sm font-medium">简历类型</legend><div className="flex gap-5 pt-2"><label className="flex items-center gap-2 text-sm"><input type="radio" name="resumeType" checked={config.resumeType === 'ONLINE'} onChange={() => setConfig({ ...config, resumeType: 'ONLINE' })} />在线简历</label><label className="flex items-center gap-2 text-sm"><input type="radio" name="resumeType" checked={config.resumeType === 'ATTACHMENT'} onChange={() => setConfig({ ...config, resumeType: 'ATTACHMENT' })} />附件简历</label></div></fieldset>
             {config.resumeType === 'ATTACHMENT' && <div className="space-y-2"><Label htmlFor="resumeName">附件简历名称</Label><Input id="resumeName" value={config.resumeName} onChange={(e) => setConfig({ ...config, resumeName: e.target.value })} placeholder="请输入拉勾弹窗中显示的完整名称" /><p className="text-xs text-muted-foreground">名称匹配失败会停止本轮投递，避免误选简历。</p></div>}
           </div>}</CardContent></Card>
